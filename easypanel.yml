@@ -1,0 +1,44 @@
+name: video-transcription-api
+description: "API de Transcrição de Vídeos com Automação Completa para Google Drive"
+version: "1.0.0"
+
+services:
+  - name: video-transcription-api
+    image:
+      dockerfile: Dockerfile
+    ports:
+      - published: 8000
+        target: 8000
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ENVIRONMENT=production
+    volumes:
+      - name: downloads
+        mount: /app/downloads
+      - name: transcriptions
+        mount: /app/transcriptions
+      - name: temp
+        mount: /app/temp
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 4096M
+          cpu: 2000m
+        reservations:
+          memory: 2048M
+          cpu: 1000m
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  - name: downloads
+    driver: local
+  - name: transcriptions
+    driver: local
+  - name: temp
+    driver: local 
