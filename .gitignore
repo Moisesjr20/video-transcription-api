@@ -128,7 +128,6 @@ transcriptions/
 *.mkv
 *.wav
 *.mp3
-*.txt
 
 # IDE
 .vscode/
