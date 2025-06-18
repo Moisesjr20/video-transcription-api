@@ -90,320 +90,64 @@ def extract_google_drive_id(url: str) -> str:
     
     raise ValueError("URL do Google Drive inválida")
 
-def download_with_selenium_fallback(file_id: str, destination: Path) -> Path:
-    """Automação com Selenium como fallback para casos difíceis"""
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        from webdriver_manager.chrome import ChromeDriverManager
-        import time
-        
-        logger.info("🤖 Iniciando automação com Selenium...")
-        
-        # Configurar Chrome headless
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        
-        # Configurar downloads
-        prefs = {
-            "download.default_directory": str(destination.parent),
-            "download.prompt_for_download": False,
-            "download.directory_upgrade": True,
-            "safebrowsing.enabled": True
-        }
-        chrome_options.add_experimental_option("prefs", prefs)
-        
-        # Inicializar driver
-        service = webdriver.chrome.service.Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        
-        try:
-            logger.info("🌐 Acessando página do Google Drive...")
-            driver.get(f"https://drive.google.com/file/d/{file_id}/view")
-            
-            # Aguardar página carregar
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            
-            # Tentar encontrar botão de download - seletores atualizados baseados no debug
-            download_selectors = [
-                "[aria-label*='Fazer o download']",  # Português brasileiro
-                "[aria-label*='Download']",          # Inglês
-                "[data-tooltip*='Fazer o download']", # Tooltip português
-                "[data-tooltip*='Download']",         # Tooltip inglês
-                "div.ndfHFb-c4YZDc-to915-LgbsSe[aria-label*='download' i]",  # Classe específica encontrada
-                "div.VIpgJd-TzA9Ye-eEGnhe[aria-label*='download' i]",        # Classe alternativa
-                "button[aria-label*='Download']",
-                "[jsaction*='download']"
-            ]
-            
-            download_button = None
-            for selector in download_selectors:
-                try:
-                    download_button = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                    )
-                    logger.info(f"✅ Botão de download encontrado: {selector}")
-                    break
-                except:
-                    continue
-            
-            if download_button:
-                # Clicar no download
-                logger.info("🖱️ Clicando no botão de download...")
-                driver.execute_script("arguments[0].click();", download_button)
-                
-                # Aguardar download iniciar
-                time.sleep(5)
-                
-                # Verificar se apareceu confirmação para arquivo grande
-                try:
-                    confirm_button = WebDriverWait(driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, "//span[contains(text(), 'Download anyway') or contains(text(), 'Baixar mesmo assim')]"))
-                    )
-                    logger.info("⚠️ Confirmação de arquivo grande detectada - clicando...")
-                    driver.execute_script("arguments[0].click();", confirm_button)
-                except:
-                    logger.info("ℹ️ Sem confirmação adicional necessária")
-                
-                # Aguardar download completar
-                logger.info("⏳ Aguardando download completar...")
-                max_wait = 600  # 10 minutos para arquivos grandes
-                waited = 0
-                
-                while waited < max_wait:
-                    # Verificar se arquivo existe
-                    if destination.exists():
-                        logger.info(f"✅ Download via Selenium concluído: {destination.stat().st_size} bytes")
-                        return destination
-                    
-                    # Verificar downloads na pasta
-                    download_files = list(destination.parent.glob(f"*{file_id}*"))
-                    if download_files:
-                        # Renomear arquivo baixado
-                        downloaded_file = download_files[0]
-                        downloaded_file.rename(destination)
-                        logger.info(f"✅ Arquivo renomeado e download concluído: {destination.stat().st_size} bytes")
-                        return destination
-                    
-                    time.sleep(5)  # Verificar a cada 5 segundos
-                    waited += 5
-                
-                raise Exception("Timeout: Download não completou em 10 minutos")
-            else:
-                raise Exception("Botão de download não encontrado na página")
-                
-        finally:
-            driver.quit()
-            
-    except ImportError:
-        logger.warning("⚠️ Selenium não disponível - usando método tradicional")
-        raise Exception("Selenium não instalado - instale com: pip install selenium webdriver-manager")
-    except Exception as e:
-        logger.error(f"❌ Erro na automação Selenium: {e}")
-        raise
-
 def download_from_google_drive(file_id: str, destination: Path) -> Path:
-    """Baixa arquivo do Google Drive com automação completa para páginas de confirmação"""
-    import re
-    from urllib.parse import parse_qs, urlparse
-    
+    """Baixa arquivo do Google Drive, lidando com confirmação de arquivos grandes de forma robusta."""
+    URL = "https://docs.google.com/uc?export=download"
+
     session = requests.Session()
-    
-    # Headers para simular navegador real
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
     session.headers.update(headers)
-    
-    def parse_html_for_download_info(html_content):
-        """Extrai informações de download de páginas HTML do Google Drive"""
-        
-        # Método 1: Buscar por tokens de confirmação
-        confirm_patterns = [
-            r'confirm=([a-zA-Z0-9_-]+)',
-            r'"confirm":"([^"]+)"',
-            r'confirm%3D([a-zA-Z0-9_-]+)',
-            r'&amp;confirm=([a-zA-Z0-9_-]+)',
-            r'confirm=([^&]+)&',
-        ]
-        
-        for pattern in confirm_patterns:
-            match = re.search(pattern, html_content)
-            if match:
-                return {'confirm_token': match.group(1)}
-        
-        # Método 2: Buscar por URLs de download direto
-        download_patterns = [
-            r'href="([^"]*uc[^"]*download[^"]*)"',
-            r'action="([^"]*uc[^"]*)"',
-            r'"downloadUrl":"([^"]+)"',
-        ]
-        
-        for pattern in download_patterns:
-            matches = re.findall(pattern, html_content)
-            if matches:
-                return {'download_url': matches[0].replace('\\u003d', '=').replace('\\u0026', '&')}
-        
-        # Método 3: Buscar por formulários de download
-        form_match = re.search(r'<form[^>]*action="([^"]*)"[^>]*>(.*?)</form>', html_content, re.DOTALL)
-        if form_match:
-            form_action = form_match.group(1)
-            form_content = form_match.group(2)
-            
-            # Buscar inputs hidden
-            inputs = re.findall(r'<input[^>]*name="([^"]*)"[^>]*value="([^"]*)"', form_content)
-            if inputs:
-                return {'form_action': form_action, 'form_data': dict(inputs)}
-        
-        return None
 
-    def attempt_download_with_info(download_info):
-        """Tenta download usando informações extraídas"""
-        
-        if 'confirm_token' in download_info:
-            confirm_token = download_info['confirm_token']
-            confirm_url = f"https://drive.google.com/uc?confirm={confirm_token}&id={file_id}&export=download"
-            logger.info(f"🔑 Usando token de confirmação automático: {confirm_token[:10]}...")
-            return session.get(confirm_url, stream=True)
-            
-        elif 'download_url' in download_info:
-            download_url = download_info['download_url']
-            if not download_url.startswith('http'):
-                download_url = 'https://drive.google.com' + download_url
-            logger.info("🔗 Usando URL de download extraída...")
-            return session.get(download_url, stream=True)
-            
-        elif 'form_action' in download_info:
-            form_action = download_info['form_action']
-            form_data = download_info['form_data']
-            if not form_action.startswith('http'):
-                form_action = 'https://drive.google.com' + form_action
-            logger.info("📝 Submetendo formulário de confirmação automático...")
-            return session.post(form_action, data=form_data, stream=True)
-        
-        return None
-
-    # Tentativa 1: URL direta
-    logger.info("📥 Tentativa 1: Download direto...")
-    url = f"https://drive.google.com/uc?id={file_id}&export=download"
-    response = session.get(url, stream=True)
+    logger.info(f"📥 Iniciando download do Google Drive para o arquivo ID: {file_id}")
     
-    # Verificar se retornou arquivo ou HTML
+    # Primeira requisição para obter o cookie de confirmação
+    response = session.get(URL, params={'id': file_id}, stream=True)
+
+    # Tenta obter o token de confirmação dos cookies da resposta
+    confirm_token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            confirm_token = value
+            break
+    
+    # Se um cookie de confirmação foi encontrado, fazemos uma nova requisição com ele
+    if confirm_token:
+        logger.info(f"🔑 Token de confirmação encontrado. Realizando segunda requisição...")
+        params = {'id': file_id, 'confirm': confirm_token}
+        response = session.get(URL, params=params, stream=True)
+    else:
+        logger.info("ℹ️ Nenhuma confirmação via cookie necessária, prosseguindo com a resposta atual.")
+
+    # Verificar se a resposta final é o arquivo e não uma página HTML
     content_type = response.headers.get('content-type', '')
+    if 'text/html' in content_type:
+        debug_file = destination.parent / f"debug_{file_id}.html"
+        with open(debug_file, 'w', encoding='utf-8') as f:
+            f.write(response.text)
+        logger.error(f"❌ Falha no download. O Google Drive retornou uma página HTML. Debug salvo em {debug_file}")
+        raise Exception("Não foi possível baixar o arquivo do Google Drive. A resposta foi uma página HTML.")
+
+    # Salvar o arquivo
+    logger.info(f"📦 Iniciando download do arquivo ({response.headers.get('content-length', 'tamanho desconhecido')} bytes)...")
+    total_size = 0
+    with open(destination, 'wb') as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+                total_size += len(chunk)
     
-    if response.status_code == 200 and 'text/html' not in content_type:
-        logger.info("✅ Download direto bem-sucedido!")
-    else:
-        logger.info("🔄 Página HTML detectada - iniciando automação...")
-        
-        # Ler conteúdo HTML para análise
-        html_content = response.text
-        logger.info(f"📄 Página HTML recebida ({len(html_content)} caracteres)")
-        
-        # Tentar extrair informações de download
-        download_info = parse_html_for_download_info(html_content)
-        
-        if download_info:
-            logger.info(f"🎯 Informações de download encontradas: {list(download_info.keys())}")
-            response = attempt_download_with_info(download_info)
-            
-            if response and response.status_code == 200:
-                content_type = response.headers.get('content-type', '')
-                if 'text/html' not in content_type:
-                    logger.info("✅ Download automático bem-sucedido!")
-                else:
-                    logger.warning("⚠️ Ainda recebendo HTML - tentando métodos alternativos...")
-                    
-                    # Tentativa adicional: URLs alternativas
-                    alternative_urls = [
-                        f"https://drive.google.com/u/0/uc?id={file_id}&export=download&confirm=t&uuid={file_id}",
-                        f"https://drive.google.com/uc?authuser=0&id={file_id}&export=download",
-                        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0",
-                    ]
-                    
-                    for alt_url in alternative_urls:
-                        logger.info(f"🔄 Tentando URL alternativa...")
-                        response = session.get(alt_url, stream=True)
-                        if response.status_code == 200 and 'text/html' not in response.headers.get('content-type', ''):
-                            logger.info("✅ URL alternativa funcionou!")
-                            break
-                    else:
-                        # Se ainda não funcionou, tentar with browser simulation
-                        logger.info("🤖 Última tentativa: simulação completa de navegador...")
-                        response = session.get(f"https://drive.google.com/file/d/{file_id}/view")
-                        if response.status_code == 200:
-                            # Buscar por link de download na página de visualização
-                            download_match = re.search(r'"downloadUrl":"([^"]+)"', response.text)
-                            if download_match:
-                                download_url = download_match.group(1).replace('\\u003d', '=').replace('\\u0026', '&')
-                                response = session.get(download_url, stream=True)
-                                if response.status_code == 200:
-                                    logger.info("✅ Simulação de navegador bem-sucedida!")
-        else:
-            logger.warning("❌ Não foi possível extrair informações de download automaticamente")
-            raise Exception("Falha na automação: não foi possível encontrar método de download na página HTML")
+    logger.info(f"✅ Download do Google Drive concluído. Tamanho: {total_size / (1024*1024):.2f} MB")
     
-    # Verificar se finalmente conseguimos o arquivo
-    if response.status_code == 200:
-        content_type = response.headers.get('content-type', '')
-        
-        if 'text/html' in content_type:
-            # Última verificação - salvar HTML para debug
-            debug_file = destination.parent / f"debug_{file_id}.html"
-            with open(debug_file, 'w', encoding='utf-8') as f:
-                f.write(response.text[:5000])  # Primeiros 5000 caracteres
+    # Verificação final para garantir que o download não resultou em um arquivo de erro
+    if destination.stat().st_size < 2048:
+        with open(destination, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read(500)
+        if 'error' in content.lower() or 'quota' in content.lower() or 'html' in content.lower():
+            raise Exception(f"Download pode ter falhado, arquivo muito pequeno e com conteúdo suspeito: {content}")
             
-            raise Exception(f"Download ainda retorna HTML após automação. HTML salvo em {debug_file} para debug.")
-        
-        # Download do arquivo
-        logger.info(f"📦 Iniciando download do arquivo ({response.headers.get('content-length', 'tamanho desconhecido')} bytes)...")
-        
-        total_size = 0
-        with open(destination, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    total_size += len(chunk)
-                    
-                    # Log a cada 50MB
-                    if total_size % (50 * 1024 * 1024) == 0:
-                        logger.info(f"📊 Baixados: {total_size / (1024*1024):.1f} MB...")
-        
-        # Verificar arquivo final
-        file_size = destination.stat().st_size
-        
-        if file_size < 1024:
-            # Arquivo muito pequeno - verificar se é erro
-            with open(destination, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            if 'html' in content.lower() or 'error' in content.lower():
-                raise Exception(f"Download resultou em arquivo inválido ({file_size} bytes). Conteúdo: {content[:200]}")
-        
-        logger.info(f"✅ Download concluído com sucesso: {file_size / (1024*1024):.1f} MB")
-        return destination
-    else:
-        # Última tentativa com Selenium
-        logger.warning("⚠️ Métodos tradicionais falharam - tentando automação com Selenium...")
-        try:
-            return download_with_selenium_fallback(file_id, destination)
-        except Exception as selenium_error:
-            logger.error(f"❌ Selenium também falhou: {selenium_error}")
-            raise Exception(f"Todos os métodos falharam. Último erro HTTP: {response.status_code} - {response.text[:200]}, Selenium: {selenium_error}")
+    return destination
 
 def extract_subtitles_from_video(video_path: Path) -> Optional[str]:
     """Extrai legendas do vídeo se disponíveis"""
