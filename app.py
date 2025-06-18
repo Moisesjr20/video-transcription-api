@@ -19,14 +19,25 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 import whisper
 import gdown
 
-# Configuração de logging
-logging.basicConfig(level=logging.INFO)
+# Configuração de logging mais detalhada
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+# Log de informações do sistema
+logger.info("=" * 50)
+logger.info("INICIANDO API DE TRANSCRIÇÃO DE VÍDEO")
+logger.info("=" * 50)
+logger.info(f"Python version: {os.sys.version}")
+logger.info(f"Working directory: {os.getcwd()}")
+logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática e extração de legendas",
-    version="1.1.2"
+    version="1.1.3"
 )
 
 # Diretórios de trabalho
@@ -446,8 +457,9 @@ async def root():
     """Endpoint raiz com informações da API"""
     return {
         "message": "Video Transcription API",
-        "version": "1.1.2",
+        "version": "1.1.3",
         "description": "API para transcrição de vídeos com suporte a Google Drive, divisão automática e extração de legendas",
+        "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
         "endpoints": [
             "POST /transcribe - Iniciar transcrição",
             "GET /status/{task_id} - Verificar status",
@@ -459,12 +471,49 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check da API"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "whisper_loaded": whisper_model is not None
-    }
+    """Health check da API com informações detalhadas"""
+    import psutil
+    import platform
+    
+    try:
+        # Informações do sistema
+        memory_info = psutil.virtual_memory()
+        disk_info = psutil.disk_usage('/')
+        
+        health_data = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "version": "1.1.3",
+            "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
+            "whisper_loaded": whisper_model is not None,
+            "system_info": {
+                "platform": platform.system(),
+                "python_version": platform.python_version(),
+                "memory_usage_percent": memory_info.percent,
+                "disk_usage_percent": disk_info.percent,
+                "available_memory_gb": round(memory_info.available / (1024**3), 2)
+            },
+            "directories": {
+                "temp_exists": TEMP_DIR.exists(),
+                "downloads_exists": DOWNLOADS_DIR.exists(),
+                "transcriptions_exists": TRANSCRIPTIONS_DIR.exists()
+            }
+        }
+        
+        logger.info(f"Health check OK - Memory: {memory_info.percent}%, Disk: {disk_info.percent}%")
+        return health_data
+        
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return {
+            "status": "unhealthy",
+            "timestamp": datetime.now().isoformat(),
+            "version": "1.1.3",
+            "error": str(e)
+        }
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.1.2")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.1.3")
+logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR]]}")
+logger.info("Aplicação pronta para receber requisições!")
+logger.info("=" * 50)

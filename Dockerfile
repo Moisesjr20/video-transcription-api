@@ -1,6 +1,11 @@
 # Use Python 3.11 slim image for better performance
 FROM python:3.11-slim
 
+# Build timestamp to invalidate cache
+ARG BUILD_DATE
+ENV BUILD_DATE=${BUILD_DATE}
+LABEL build_date=${BUILD_DATE}
+
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -9,6 +14,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -33,9 +39,9 @@ RUN chmod +x /app
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Improved health check with more detailed output
+HEALTHCHECK --interval=15s --timeout=10s --start-period=30s --retries=5 \
+    CMD curl -f http://localhost:8000/health || (echo "Health check failed" && exit 1)
 
-# Run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"] 
+# Run the application with more verbose logging
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"] 
