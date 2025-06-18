@@ -16,7 +16,7 @@ from datetime import datetime
 import moviepy.editor as mp
 from moviepy.video.io.VideoFileClip import VideoFileClip
 import whisper
-import re
+import gdown
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -91,62 +91,16 @@ def extract_google_drive_id(url: str) -> str:
     raise ValueError("URL do Google Drive inválida")
 
 def download_from_google_drive(file_id: str, destination: Path) -> Path:
-    """Baixa arquivo do Google Drive, lidando com confirmação de arquivos grandes de forma robusta."""
-    URL = "https://docs.google.com/uc?export=download"
-
-    session = requests.Session()
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    session.headers.update(headers)
-
-    logger.info(f"📥 Iniciando download do Google Drive para o arquivo ID: {file_id}")
+    """Baixa arquivo do Google Drive usando a biblioteca gdown para robustez."""
+    url = f'https://drive.google.com/uc?id={file_id}'
+    logger.info(f"📥 Iniciando download do Google Drive com gdown: {url}")
+    output_path = str(destination)
+    gdown.download(url, output_path, quiet=False, fuzzy=True)
     
-    # Primeira requisição para obter o cookie de confirmação
-    response = session.get(URL, params={'id': file_id}, stream=True)
-
-    # Tenta obter o token de confirmação dos cookies da resposta
-    confirm_token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            confirm_token = value
-            break
-    
-    # Se um cookie de confirmação foi encontrado, fazemos uma nova requisição com ele
-    if confirm_token:
-        logger.info(f"🔑 Token de confirmação encontrado. Realizando segunda requisição...")
-        params = {'id': file_id, 'confirm': confirm_token}
-        response = session.get(URL, params=params, stream=True)
-    else:
-        logger.info("ℹ️ Nenhuma confirmação via cookie necessária, prosseguindo com a resposta atual.")
-
-    # Verificar se a resposta final é o arquivo e não uma página HTML
-    content_type = response.headers.get('content-type', '')
-    if 'text/html' in content_type:
-        debug_file = destination.parent / f"debug_{file_id}.html"
-        with open(debug_file, 'w', encoding='utf-8') as f:
-            f.write(response.text)
-        logger.error(f"❌ Falha no download. O Google Drive retornou uma página HTML. Debug salvo em {debug_file}")
-        raise Exception("Não foi possível baixar o arquivo do Google Drive. A resposta foi uma página HTML.")
-
-    # Salvar o arquivo
-    logger.info(f"📦 Iniciando download do arquivo ({response.headers.get('content-length', 'tamanho desconhecido')} bytes)...")
-    total_size = 0
-    with open(destination, 'wb') as f:
-        for chunk in response.iter_content(chunk_size=8192):
-            if chunk:
-                f.write(chunk)
-                total_size += len(chunk)
-    
-    logger.info(f"✅ Download do Google Drive concluído. Tamanho: {total_size / (1024*1024):.2f} MB")
-    
-    # Verificação final para garantir que o download não resultou em um arquivo de erro
-    if destination.stat().st_size < 2048:
-        with open(destination, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read(500)
-        if 'error' in content.lower() or 'quota' in content.lower() or 'html' in content.lower():
-            raise Exception(f"Download pode ter falhado, arquivo muito pequeno e com conteúdo suspeito: {content}")
-            
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise Exception(f"Falha no download com gdown. O arquivo de destino não foi criado ou está vazio: {destination}")
+        
+    logger.info(f"✅ Download via gdown concluído. Arquivo salvo em: {destination}")
     return destination
 
 def extract_subtitles_from_video(video_path: Path) -> Optional[str]:
