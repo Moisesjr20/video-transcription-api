@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática e extração de legendas",
-    version="1.1.1"
+    version="1.1.0"
 )
 
 # Diretórios de trabalho
@@ -445,7 +445,7 @@ async def root():
     """Endpoint raiz com informações da API"""
     return {
         "message": "Video Transcription API",
-        "version": "1.1.1",
+        "version": "1.1.0",
         "description": "API para transcrição de vídeos com suporte a Google Drive, divisão automática e extração de legendas",
         "endpoints": [
             "POST /transcribe - Iniciar transcrição",
@@ -466,4 +466,4 @@ async def health_check():
     }
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.1.1")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.1.0")
