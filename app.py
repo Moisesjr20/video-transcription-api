@@ -12,6 +12,7 @@ from typing import Optional, List
 import logging
 from datetime import datetime
 import re
+import json
 
 # Imports para processamento de vídeo
 import moviepy.editor as mp
@@ -37,16 +38,17 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática e extração de legendas",
-    version="1.1.3"
+    version="1.2.0"
 )
 
 # Diretórios de trabalho
 TEMP_DIR = Path("temp")
 DOWNLOADS_DIR = Path("downloads")
 TRANSCRIPTIONS_DIR = Path("transcriptions")
+TASKS_DIR = Path("tasks")
 
 # Criar diretórios se não existirem
-for directory in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR]:
+for directory in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]:
     directory.mkdir(exist_ok=True)
 
 # Carregar modelo Whisper (será carregado na primeira execução)
@@ -73,19 +75,71 @@ class TranscriptionResponse(BaseModel):
     task_id: str
     status: str
     message: str
-    download_url: Optional[str] = None
+    upload_status: str
+    estimated_time: Optional[str] = None
+    check_status_url: Optional[str] = None
 
 class TranscriptionStatus(BaseModel):
     task_id: str
-    status: str  # processing, completed, error
+    status: str  # upload_concluido, em_progresso, sucesso, erro
     progress: float
     message: str
     transcription: Optional[str] = None
     segments: Optional[List[dict]] = None
     filename: Optional[str] = None
+    created_at: str
+    completed_at: Optional[str] = None
+    file_info: Optional[dict] = None
 
 # Storage para tarefas em andamento
 transcription_tasks = {}
+
+def save_task_to_file(task_id: str, task_data: dict):
+    """Salva o status da tarefa em arquivo para persistência"""
+    try:
+        task_file = TASKS_DIR / f"{task_id}.json"
+        with open(task_file, 'w', encoding='utf-8') as f:
+            json.dump(task_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Erro ao salvar tarefa {task_id}: {e}")
+
+def load_task_from_file(task_id: str) -> Optional[dict]:
+    """Carrega o status da tarefa do arquivo"""
+    try:
+        task_file = TASKS_DIR / f"{task_id}.json"
+        if task_file.exists():
+            with open(task_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Erro ao carregar tarefa {task_id}: {e}")
+    return None
+
+def load_all_tasks():
+    """Carrega todas as tarefas salvas na inicialização"""
+    try:
+        for task_file in TASKS_DIR.glob("*.json"):
+            task_id = task_file.stem
+            task_data = load_task_from_file(task_id)
+            if task_data:
+                transcription_tasks[task_id] = task_data
+                logger.info(f"Tarefa {task_id} carregada: {task_data['status']}")
+    except Exception as e:
+        logger.error(f"Erro ao carregar tarefas: {e}")
+
+def get_file_size_mb(file_path: Path) -> float:
+    """Retorna o tamanho do arquivo em MB"""
+    return file_path.stat().st_size / (1024 * 1024)
+
+def estimate_transcription_time(file_size_mb: float) -> str:
+    """Estima o tempo de transcrição baseado no tamanho do arquivo"""
+    # Estimativa: ~1 minuto para cada 10MB
+    estimated_minutes = max(1, int(file_size_mb / 10))
+    if estimated_minutes < 60:
+        return f"{estimated_minutes} minutos"
+    else:
+        hours = estimated_minutes // 60
+        minutes = estimated_minutes % 60
+        return f"{hours}h {minutes}min"
 
 def extract_google_drive_id(url: str) -> str:
     """Extrai o ID do Google Drive da URL de compartilhamento"""
@@ -205,10 +259,11 @@ def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = 
 async def process_video_transcription(task_id: str, request: VideoTranscriptionRequest):
     """Processa a transcrição do vídeo de forma assíncrona"""
     try:
-        # Atualizar status
-        transcription_tasks[task_id]["status"] = "processing"
+        # Fase 1: Upload e preparação
+        transcription_tasks[task_id]["status"] = "upload_concluido"
         transcription_tasks[task_id]["progress"] = 0.1
-        transcription_tasks[task_id]["message"] = "Baixando vídeo..."
+        transcription_tasks[task_id]["message"] = "✅ Upload concluído! Iniciando preparação do vídeo..."
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Determinar origem do vídeo
         temp_video_path = None
@@ -242,8 +297,25 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             with open(temp_video_path, 'wb') as f:
                 f.write(base64.b64decode(base64_data))
         
+        # Informações do arquivo
+        if temp_video_path and temp_video_path.exists():
+            file_size_mb = get_file_size_mb(temp_video_path)
+            estimated_time = estimate_transcription_time(file_size_mb)
+            
+            transcription_tasks[task_id]["file_info"] = {
+                "filename": temp_video_path.name,
+                "size_mb": round(file_size_mb, 2),
+                "estimated_time": estimated_time
+            }
+        else:
+            raise Exception("Erro: Arquivo de vídeo não foi criado corretamente")
+        
+        # Fase 2: Processamento iniciado
+        transcription_tasks[task_id]["status"] = "em_progresso"
         transcription_tasks[task_id]["progress"] = 0.2
-        transcription_tasks[task_id]["message"] = "Vídeo baixado. Verificando legendas..."
+        file_size_info = f"({round(file_size_mb, 1)}MB)" if 'file_size_mb' in locals() else ""
+        transcription_tasks[task_id]["message"] = f"🎬 Arquivo recebido {file_size_info}. Verificando legendas..."
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Extrair legendas se solicitado
         subtitles_text = None
@@ -253,14 +325,16 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
                 logger.info("Legendas encontradas no vídeo")
         
         transcription_tasks[task_id]["progress"] = 0.3
-        transcription_tasks[task_id]["message"] = "Analisando duração do vídeo..."
+        transcription_tasks[task_id]["message"] = "📏 Analisando duração do vídeo..."
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Dividir vídeo se necessário
         max_minutes = request.max_segment_minutes or 10
         video_segments = split_video_by_duration(temp_video_path, max_minutes)
         
         transcription_tasks[task_id]["progress"] = 0.4
-        transcription_tasks[task_id]["message"] = f"Vídeo dividido em {len(video_segments)} segmento(s). Convertendo para áudio..."
+        transcription_tasks[task_id]["message"] = f"✂️ Vídeo dividido em {len(video_segments)} segmento(s). Convertendo para áudio..."
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Converter segmentos para áudio
         audio_segments = []
@@ -280,21 +354,24 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
                 video_segment.unlink()
         
         transcription_tasks[task_id]["progress"] = 0.5
-        transcription_tasks[task_id]["message"] = "Carregando modelo de transcrição..."
+        transcription_tasks[task_id]["message"] = "🤖 Carregando modelo de transcrição..."
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Carregar modelo Whisper
         model = load_whisper_model()
         
         transcription_tasks[task_id]["progress"] = 0.6
-        transcription_tasks[task_id]["message"] = "Iniciando transcrição..."
+        transcription_tasks[task_id]["message"] = "🎙️ Iniciando transcrição com inteligência artificial..."
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Transcrever cada segmento
         all_transcriptions = []
         all_segments_data = []
         
         for i, audio_path in enumerate(audio_segments):
-            transcription_tasks[task_id]["message"] = f"Transcrevendo segmento {i+1}/{len(audio_segments)}..."
+            transcription_tasks[task_id]["message"] = f"🎯 Transcrevendo segmento {i+1}/{len(audio_segments)}..."
             transcription_tasks[task_id]["progress"] = 0.6 + (0.3 * (i / len(audio_segments)))
+            save_task_to_file(task_id, transcription_tasks[task_id])
             
             transcription_result = transcribe_audio_segment(
                 audio_path, 
@@ -317,7 +394,8 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             result_text = f"=== LEGENDAS EXTRAÍDAS ===\n{subtitles_text}\n\n=== TRANSCRIÇÃO DE ÁUDIO ===\n{final_transcription}"
         
         transcription_tasks[task_id]["progress"] = 0.9
-        transcription_tasks[task_id]["message"] = "Salvando resultado..."
+        transcription_tasks[task_id]["message"] = "💾 Salvando transcrição..."
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Salvar transcrição final
         transcription_filename = f"transcription_{task_id}.txt"
@@ -328,13 +406,15 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         
         # Atualizar status final
         transcription_tasks[task_id].update({
-            "status": "completed",
+            "status": "sucesso",
             "progress": 1.0,
-            "message": "Transcrição concluída com sucesso!",
+            "message": "🎉 Transcrição concluída com sucesso!",
             "transcription": result_text,
             "segments": all_segments_data,
-            "filename": transcription_filename
+            "filename": transcription_filename,
+            "completed_at": datetime.now().isoformat()
         })
+        save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Limpar arquivo de vídeo temporário
         if temp_video_path and temp_video_path.exists():
@@ -345,10 +425,12 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
     except Exception as e:
         logger.error(f"Erro na transcrição {task_id}: {e}")
         transcription_tasks[task_id].update({
-            "status": "error",
-            "message": f"Erro: {str(e)}",
-            "progress": 0.0
+            "status": "erro",
+            "message": f"❌ Erro: {str(e)}",
+            "progress": 0.0,
+            "completed_at": datetime.now().isoformat()
         })
+        save_task_to_file(task_id, transcription_tasks[task_id])
 
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_video(request: VideoTranscriptionRequest, background_tasks: BackgroundTasks):
@@ -366,32 +448,45 @@ async def transcribe_video(request: VideoTranscriptionRequest, background_tasks:
     
     # Inicializar status da tarefa
     transcription_tasks[task_id] = {
-        "status": "queued",
+        "status": "upload_concluido",
         "progress": 0.0,
-        "message": "Tarefa adicionada à fila",
+        "message": "✅ Upload realizado com sucesso! Transcrição será iniciada em instantes...",
         "created_at": datetime.now().isoformat(),
         "transcription": None,
         "segments": None,
-        "filename": None
+        "filename": None,
+        "completed_at": None,
+        "file_info": None
     }
+    
+    # Salvar tarefa
+    save_task_to_file(task_id, transcription_tasks[task_id])
     
     # Adicionar tarefa ao background
     background_tasks.add_task(process_video_transcription, task_id, request)
     
     return TranscriptionResponse(
         task_id=task_id,
-        status="queued",
-        message="Transcrição iniciada. Use /status/{task_id} para acompanhar o progresso."
+        status="upload_concluido",
+        upload_status="sucesso",
+        message="🎉 Upload concluído com sucesso! Sua transcrição está sendo processada.",
+        estimated_time="A transcrição será iniciada em alguns segundos",
+        check_status_url=f"/status/{task_id}"
     )
 
 @app.get("/status/{task_id}", response_model=TranscriptionStatus)
 async def get_transcription_status(task_id: str):
     """Obtém o status de uma transcrição"""
     
-    if task_id not in transcription_tasks:
-        raise HTTPException(status_code=404, detail="Tarefa não encontrada")
+    # Tentar carregar da memória ou arquivo
+    task_data = transcription_tasks.get(task_id)
+    if not task_data:
+        task_data = load_task_from_file(task_id)
+        if task_data:
+            transcription_tasks[task_id] = task_data
     
-    task_data = transcription_tasks[task_id]
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada")
     
     return TranscriptionStatus(
         task_id=task_id,
@@ -400,7 +495,10 @@ async def get_transcription_status(task_id: str):
         message=task_data["message"],
         transcription=task_data.get("transcription"),
         segments=task_data.get("segments"),
-        filename=task_data.get("filename")
+        filename=task_data.get("filename"),
+        created_at=task_data["created_at"],
+        completed_at=task_data.get("completed_at"),
+        file_info=task_data.get("file_info")
     )
 
 @app.get("/download/{filename}")
@@ -457,12 +555,18 @@ async def root():
     """Endpoint raiz com informações da API"""
     return {
         "message": "Video Transcription API",
-        "version": "1.1.3",
-        "description": "API para transcrição de vídeos com suporte a Google Drive, divisão automática e extração de legendas",
+        "version": "1.2.0",
+        "description": "API para transcrição de vídeos com processamento assíncrono e status em tempo real",
         "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
+        "status_meanings": {
+            "upload_concluido": "Arquivo recebido, transcrição será iniciada",
+            "em_progresso": "Transcrição em andamento",
+            "sucesso": "Transcrição concluída com sucesso",
+            "erro": "Erro durante o processamento"
+        },
         "endpoints": [
-            "POST /transcribe - Iniciar transcrição",
-            "GET /status/{task_id} - Verificar status",
+            "POST /transcribe - Iniciar transcrição (resposta imediata)",
+            "GET /status/{task_id} - Verificar status da transcrição",
             "GET /download/{filename} - Download da transcrição",
             "GET /tasks - Listar todas as tarefas",
             "DELETE /tasks/{task_id} - Remover tarefa"
@@ -483,7 +587,7 @@ async def health_check():
         health_data = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "version": "1.1.3",
+            "version": "1.2.0",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -508,12 +612,16 @@ async def health_check():
         return {
             "status": "unhealthy",
             "timestamp": datetime.now().isoformat(),
-            "version": "1.1.3",
+            "version": "1.2.0",
             "error": str(e)
         }
 
+# Carregar tarefas salvas na inicialização
+load_all_tasks()
+
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.1.3")
-logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR]]}")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.2.0")
+logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
+logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")
 logger.info("=" * 50)
