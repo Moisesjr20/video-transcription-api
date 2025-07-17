@@ -16,9 +16,12 @@
         .status { background: #e9ecef; color: #333; }
         .error { background: #ffe0e0; color: #b00; }
         .success { background: #e0ffe0; color: #080; }
-        .transcription { margin-top: 24px; background: #f4f4f4; padding: 16px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; }
+        .transcription { margin-top: 24px; background: #f4f4f4; padding: 16px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; max-height: 400px; overflow-y: auto; }
         .loader { display: inline-block; width: 18px; height: 18px; border: 3px solid #007bff; border-radius: 50%; border-top: 3px solid #fff; animation: spin 1s linear infinite; margin-right: 8px; }
         @keyframes spin { 100% { transform: rotate(360deg); } }
+        .progress { margin-top: 10px; }
+        .progress-bar { width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden; }
+        .progress-fill { height: 100%; background: #007bff; transition: width 0.3s; }
     </style>
 </head>
 <body>
@@ -28,14 +31,22 @@
         <input type="text" id="drive-link" placeholder="https://drive.google.com/file/d/..." autocomplete="off">
         <button id="transcribe-btn">Transcrever</button>
         <div id="status" class="status" style="display:none;"></div>
+        <div id="progress" class="progress" style="display:none;">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
         <div id="result" class="transcription" style="display:none;"></div>
     </div>
     <script>
         const btn = document.getElementById('transcribe-btn');
         const input = document.getElementById('drive-link');
         const statusDiv = document.getElementById('status');
+        const progressDiv = document.getElementById('progress');
+        const progressFill = document.getElementById('progress-fill');
         const resultDiv = document.getElementById('result');
         let currentTaskId = null;
+        let pollInterval = null;
 
         btn.onclick = async function() {
             const url = input.value.trim();
@@ -43,54 +54,98 @@
                 showStatus('Por favor, cole o link do Google Drive.', 'error');
                 return;
             }
+            
             btn.disabled = true;
             showStatus('<span class="loader"></span>Enviando para transcrição...', 'status');
             resultDiv.style.display = 'none';
             resultDiv.textContent = '';
+            progressDiv.style.display = 'none';
+            
             try {
                 const resp = await fetch('/transcribe', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ google_drive_url: url })
                 });
+                
+                if (!resp.ok) {
+                    const errorData = await resp.json().catch(() => ({}));
+                    throw new Error(errorData.detail || `Erro ${resp.status}: ${resp.statusText}`);
+                }
+                
                 const data = await resp.json();
-                if (!resp.ok) throw new Error(data.detail || 'Erro ao iniciar transcrição');
                 currentTaskId = data.task_id;
+                showStatus('<span class="loader"></span>Transcrição iniciada! Aguarde...', 'status');
+                progressDiv.style.display = 'block';
                 pollStatus(currentTaskId);
+                
             } catch (e) {
                 showStatus('Erro: ' + e.message, 'error');
                 btn.disabled = false;
+                progressDiv.style.display = 'none';
             }
         };
 
         async function pollStatus(taskId) {
-            showStatus('<span class="loader"></span>Transcrevendo... Aguarde.', 'status');
-            resultDiv.style.display = 'none';
-            let finished = false;
-            while (!finished) {
-                await new Promise(r => setTimeout(r, 3000));
+            let attempts = 0;
+            const maxAttempts = 60; // 10 minutos (10s cada)
+            
+            pollInterval = setInterval(async () => {
+                attempts++;
+                
                 try {
-                    const resp = await fetch(`/status/${taskId}`);
+                    const resp = await fetch(`/status/${taskId}`, {
+                        method: 'GET',
+                        headers: { 'Cache-Control': 'no-cache' }
+                    });
+                    
+                    if (!resp.ok) {
+                        throw new Error(`Erro ${resp.status}: ${resp.statusText}`);
+                    }
+                    
                     const data = await resp.json();
+                    
+                    // Atualizar progresso
+                    const progress = Math.round(data.progress * 100);
+                    progressFill.style.width = progress + '%';
+                    
                     if (data.status === 'sucesso') {
+                        clearInterval(pollInterval);
                         showStatus('Transcrição concluída!', 'success');
                         resultDiv.textContent = data.transcription || '[Sem texto]';
                         resultDiv.style.display = 'block';
                         btn.disabled = false;
-                        finished = true;
+                        progressDiv.style.display = 'none';
+                        
                     } else if (data.status === 'erro') {
+                        clearInterval(pollInterval);
                         showStatus('Erro: ' + (data.message || 'Falha na transcrição.'), 'error');
                         btn.disabled = false;
-                        finished = true;
+                        progressDiv.style.display = 'none';
+                        
                     } else {
-                        showStatus(`<span class="loader"></span>${data.message || 'Processando...'}`, 'status');
+                        // Ainda processando
+                        showStatus(`<span class="loader"></span>${data.message || 'Processando...'} (${progress}%)`, 'status');
+                        
+                        if (attempts >= maxAttempts) {
+                            clearInterval(pollInterval);
+                            showStatus('Timeout: A transcrição demorou muito. Tente novamente.', 'error');
+                            btn.disabled = false;
+                            progressDiv.style.display = 'none';
+                        }
                     }
+                    
                 } catch (e) {
-                    showStatus('Erro ao consultar status: ' + e.message, 'error');
-                    btn.disabled = false;
-                    finished = true;
+                    console.error('Erro ao consultar status:', e);
+                    
+                    if (attempts >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        showStatus('Erro ao consultar status: ' + e.message, 'error');
+                        btn.disabled = false;
+                        progressDiv.style.display = 'none';
+                    }
                 }
-            }
+            }, 10000); // Verificar a cada 10 segundos
         }
 
         function showStatus(msg, type) {
