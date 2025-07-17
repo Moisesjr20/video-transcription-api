@@ -1,52 +1,48 @@
 # Use Python 3.11 slim image for better performance
 FROM python:3.11-slim
 
-# Build timestamp to invalidate cache
-ARG BUILD_DATE
-ENV BUILD_DATE=${BUILD_DATE}
-LABEL build_date=${BUILD_DATE}
+# Argumentos de build
+ARG BUILD_DATE=unknown
+ARG FORCE_REBUILD=1
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+# Metadados
+LABEL maintainer="Transcritor Automático"
+LABEL version="2.0.0"
+LABEL description="Aplicação de monitoramento automático de vídeos no Google Drive"
+LABEL build-date=$BUILD_DATE
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Definir variáveis de ambiente
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV BUILD_DATE=$BUILD_DATE
+
+# Instalar dependências do sistema
+RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Criar diretório de trabalho
 WORKDIR /app
 
-# Copy requirements first for better Docker layer caching
+# Copiar requirements primeiro para cache
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# Instalar dependências Python
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copiar código da aplicação
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p temp downloads transcriptions
+# Criar diretórios necessários
+RUN mkdir -p /app/transcriptions /app/downloads /app/temp /app/tasks /app/static
 
-# Set permissions
-RUN chmod +x /app
-RUN chmod +x /app/check_env.py
-
-# Create startup script
-RUN echo '#!/bin/bash\npython /app/check_env.py\nexec "$@"' > /app/start.sh && chmod +x /app/start.sh
-
-# Expose port
+# Expor porta
 EXPOSE 8000
 
-# Improved health check with more detailed output
-HEALTHCHECK --interval=15s --timeout=10s --start-period=30s --retries=5 \
-    CMD curl -f http://localhost:8000/health || (echo "Health check failed" && exit 1)
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the application with environment check and more verbose logging
-CMD ["/app/start.sh", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"] 
+# Comando para iniciar a aplicação
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"] 

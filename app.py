@@ -16,7 +16,7 @@ import re
 import json
 
 # Imports para monitoramento automático
-from drive_monitor import drive_monitor
+from drive_monitor import DriveMonitor
 from drive_service import DriveService
 from gmail_service import GmailService
 
@@ -42,16 +42,16 @@ logger = logging.getLogger(__name__)
 
 # Log de informações do sistema
 logger.info("=" * 50)
-logger.info("INICIANDO API DE TRANSCRIÇÃO DE VÍDEO")
+logger.info("INICIANDO TRANSCRITOR AUTOMÁTICO")
 logger.info("=" * 50)
 logger.info(f"Python version: {os.sys.version}")
 logger.info(f"Working directory: {os.getcwd()}")
 logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 
 app = FastAPI(
-    title="Video Transcription API",
-    description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.8"
+    title="Transcritor Automático",
+    description="Aplicação para monitoramento automático de vídeos no Google Drive e transcrição automática",
+    version="2.0.0"
 )
 
 # Diretórios de trabalho
@@ -73,6 +73,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Carregar modelo Whisper (será carregado na primeira execução)
 whisper_model = None
+
+# Instância do monitor
+drive_monitor = DriveMonitor()
 
 def load_whisper_model():
     global whisper_model
@@ -254,582 +257,456 @@ def split_video_by_duration(video_path: Path, max_minutes: int = 10) -> List[Pat
     return segments
 
 def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = None) -> dict:
-    """Transcreve um segmento de áudio usando Whisper"""
+    """Transcreve um segmento de áudio"""
     try:
+        logger.info(f"🎤 Transcrevendo segmento: {audio_path.name}")
+        
+        # Transcrever com Whisper
         result = model.transcribe(
             str(audio_path),
             language=language,
-            verbose=False
+            task="transcribe"
         )
         
         return {
-            "text": result["text"].strip(),
-            "segments": result.get("segments", []),
-            "language": result.get("language", "unknown")
+            'text': result['text'],
+            'segments': result.get('segments', []),
+            'language': result.get('language', 'unknown')
         }
+        
     except Exception as e:
-        logger.error(f"Erro na transcrição: {e}")
+        logger.error(f"Erro ao transcrever segmento {audio_path}: {e}")
         return {
-            "text": "",
-            "segments": [],
-            "language": "unknown",
-            "error": str(e)
+            'text': f"[ERRO: {str(e)}]",
+            'segments': [],
+            'language': 'unknown'
         }
 
 async def process_video_transcription(task_id: str, request: VideoTranscriptionRequest):
-    """Processa a transcrição do vídeo de forma assíncrona"""
+    """Processa a transcrição de um vídeo em background"""
     try:
-        # Fase 1: Upload e preparação
-        transcription_tasks[task_id]["status"] = "upload_concluido"
-        transcription_tasks[task_id]["progress"] = 0.1
-        transcription_tasks[task_id]["message"] = "✅ Upload concluído! Iniciando preparação do vídeo..."
+        logger.info(f"🎬 Iniciando processamento da tarefa {task_id}")
+        
+        # Atualizar status inicial
+        transcription_tasks[task_id] = {
+            'task_id': task_id,
+            'status': 'em_progresso',
+            'progress': 0.0,
+            'message': 'Iniciando download...',
+            'transcription': None,
+            'segments': [],
+            'filename': request.filename or 'video',
+            'created_at': datetime.now().isoformat(),
+            'completed_at': None,
+            'file_info': {}
+        }
         save_task_to_file(task_id, transcription_tasks[task_id])
         
-        # Determinar origem do vídeo
-        temp_video_path = None
-        
+        # Determinar fonte do vídeo
+        video_path = None
         if request.google_drive_url:
+            # Download do Google Drive
             file_id = extract_google_drive_id(request.google_drive_url)
-            filename = request.filename or f"video_{task_id}.mp4"
-            temp_video_path = TEMP_DIR / filename
-            download_from_google_drive(file_id, temp_video_path)
+            video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
+            video_path = download_from_google_drive(file_id, video_path)
+            
+            transcription_tasks[task_id]['progress'] = 0.1
+            transcription_tasks[task_id]['message'] = 'Download concluído, extraindo áudio...'
+            save_task_to_file(task_id, transcription_tasks[task_id])
             
         elif request.url:
-            filename = request.filename or f"video_{task_id}.mp4"
-            temp_video_path = TEMP_DIR / filename
+            # Download de URL
+            video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
             response = requests.get(request.url, stream=True)
             response.raise_for_status()
             
-            with open(temp_video_path, 'wb') as f:
-                shutil.copyfileobj(response.raw, f)
-                
-        elif request.base64_data:
-            import base64
-            filename = request.filename or f"video_{task_id}.mp4"
-            temp_video_path = TEMP_DIR / filename
+            with open(video_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    
+            transcription_tasks[task_id]['progress'] = 0.1
+            transcription_tasks[task_id]['message'] = 'Download concluído, extraindo áudio...'
+            save_task_to_file(task_id, transcription_tasks[task_id])
             
-            # Remover prefixo data: se presente
-            if request.base64_data.startswith('data:'):
-                base64_data = request.base64_data.split(',')[1]
-            else:
-                base64_data = request.base64_data
+        elif request.base64_data:
+            # Dados base64
+            import base64
+            video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
+            video_data = base64.b64decode(request.base64_data)
+            
+            with open(video_path, 'wb') as f:
+                f.write(video_data)
                 
-            with open(temp_video_path, 'wb') as f:
-                f.write(base64.b64decode(base64_data))
+            transcription_tasks[task_id]['progress'] = 0.1
+            transcription_tasks[task_id]['message'] = 'Arquivo salvo, extraindo áudio...'
+            save_task_to_file(task_id, transcription_tasks[task_id])
+        else:
+            raise ValueError("Nenhuma fonte de vídeo fornecida")
         
         # Informações do arquivo
-        if temp_video_path and temp_video_path.exists():
-            file_size_mb = get_file_size_mb(temp_video_path)
-            estimated_time = estimate_transcription_time(file_size_mb)
-            
-            transcription_tasks[task_id]["file_info"] = {
-                "filename": temp_video_path.name,
-                "size_mb": round(file_size_mb, 2),
-                "estimated_time": estimated_time
-            }
-        else:
-            raise Exception("Erro: Arquivo de vídeo não foi criado corretamente")
+        file_size_mb = get_file_size_mb(video_path)
+        transcription_tasks[task_id]['file_info'] = {
+            'size_mb': file_size_mb,
+            'path': str(video_path)
+        }
         
-        # Fase 2: Processamento iniciado
-        transcription_tasks[task_id]["status"] = "em_progresso"
-        transcription_tasks[task_id]["progress"] = 0.2
-        file_size_info = f"({round(file_size_mb, 1)}MB)" if 'file_size_mb' in locals() else ""
-        transcription_tasks[task_id]["message"] = f"🎬 Arquivo recebido {file_size_info}. Verificando legendas..."
-        save_task_to_file(task_id, transcription_tasks[task_id])
+        # Extrair áudio
+        audio_path = TEMP_DIR / f"{task_id}_audio.wav"
+        video = VideoFileClip(str(video_path))
+        video.audio.write_audiofile(str(audio_path), verbose=False, logger=None)
+        video.close()
         
-        # Extrair legendas se solicitado
-        subtitles_text = None
-        if request.extract_subtitles:
-            subtitles_text = extract_subtitles_from_video(temp_video_path)
-            if subtitles_text:
-                logger.info("Legendas encontradas no vídeo")
-        
-        transcription_tasks[task_id]["progress"] = 0.3
-        transcription_tasks[task_id]["message"] = "📏 Analisando duração do vídeo..."
-        save_task_to_file(task_id, transcription_tasks[task_id])
-        
-        # Dividir vídeo se necessário
-        max_minutes = request.max_segment_minutes or 10
-        video_segments = split_video_by_duration(temp_video_path, max_minutes)
-        
-        transcription_tasks[task_id]["progress"] = 0.4
-        transcription_tasks[task_id]["message"] = f"✂️ Vídeo dividido em {len(video_segments)} segmento(s). Convertendo para áudio..."
-        save_task_to_file(task_id, transcription_tasks[task_id])
-        
-        # Converter segmentos para áudio
-        audio_segments = []
-        for i, video_segment in enumerate(video_segments):
-            audio_path = video_segment.with_suffix('.wav')
-            
-            video_clip = VideoFileClip(str(video_segment))
-            audio_clip = video_clip.audio
-            audio_clip.write_audiofile(str(audio_path), verbose=False, logger=None)
-            audio_clip.close()
-            video_clip.close()
-            
-            audio_segments.append(audio_path)
-            
-            # Limpar segmento de vídeo se não for o original
-            if video_segment != temp_video_path:
-                video_segment.unlink()
-        
-        transcription_tasks[task_id]["progress"] = 0.5
-        transcription_tasks[task_id]["message"] = "🤖 Carregando modelo de transcrição..."
+        transcription_tasks[task_id]['progress'] = 0.2
+        transcription_tasks[task_id]['message'] = 'Áudio extraído, carregando modelo...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
         # Carregar modelo Whisper
         model = load_whisper_model()
         
-        transcription_tasks[task_id]["progress"] = 0.6
-        transcription_tasks[task_id]["message"] = "🎙️ Iniciando transcrição com inteligência artificial..."
+        transcription_tasks[task_id]['progress'] = 0.3
+        transcription_tasks[task_id]['message'] = 'Modelo carregado, iniciando transcrição...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
-        # Transcrever cada segmento
-        all_transcriptions = []
-        all_segments_data = []
+        # Verificar se precisa dividir o vídeo
+        duration = VideoFileClip(str(video_path)).duration
+        max_duration = request.max_segment_minutes * 60
         
-        for i, audio_path in enumerate(audio_segments):
-            transcription_tasks[task_id]["message"] = f"🎯 Transcrevendo segmento {i+1}/{len(audio_segments)}..."
-            transcription_tasks[task_id]["progress"] = 0.6 + (0.3 * (i / len(audio_segments)))
+        if duration > max_duration:
+            # Dividir vídeo em segmentos
+            transcription_tasks[task_id]['message'] = f'Vídeo longo ({duration/60:.1f}min), dividindo em segmentos...'
             save_task_to_file(task_id, transcription_tasks[task_id])
             
-            transcription_result = transcribe_audio_segment(
-                audio_path, 
-                model, 
-                request.language
-            )
+            segments = split_video_by_duration(video_path, request.max_segment_minutes)
+            all_transcriptions = []
+            all_segments = []
             
-            all_transcriptions.append(transcription_result["text"])
-            all_segments_data.extend(transcription_result["segments"])
+            for i, segment_path in enumerate(segments):
+                # Extrair áudio do segmento
+                segment_audio = TEMP_DIR / f"{task_id}_segment_{i}_audio.wav"
+                segment_video = VideoFileClip(str(segment_path))
+                segment_video.audio.write_audiofile(str(segment_audio), verbose=False, logger=None)
+                segment_video.close()
+                
+                # Transcrever segmento
+                progress = 0.3 + (0.6 * (i + 1) / len(segments))
+                transcription_tasks[task_id]['progress'] = progress
+                transcription_tasks[task_id]['message'] = f'Transcrevendo segmento {i+1}/{len(segments)}...'
+                save_task_to_file(task_id, transcription_tasks[task_id])
+                
+                result = transcribe_audio_segment(segment_audio, model, request.language)
+                all_transcriptions.append(result['text'])
+                all_segments.extend(result['segments'])
+                
+                # Limpar arquivo temporário
+                segment_audio.unlink()
+                segment_path.unlink()
             
-            # Limpar arquivo de áudio
-            audio_path.unlink()
+            final_transcription = ' '.join(all_transcriptions)
+        else:
+            # Transcrever vídeo completo
+            transcription_tasks[task_id]['message'] = 'Transcrevendo vídeo...'
+            save_task_to_file(task_id, transcription_tasks[task_id])
+            
+            result = transcribe_audio_segment(audio_path, model, request.language)
+            final_transcription = result['text']
+            all_segments = result['segments']
         
-        # Unir todas as transcrições
-        final_transcription = "\n\n".join(all_transcriptions)
-        
-        # Se havia legendas, adicionar ao resultado
-        result_text = final_transcription
-        if subtitles_text:
-            result_text = f"=== LEGENDAS EXTRAÍDAS ===\n{subtitles_text}\n\n=== TRANSCRIÇÃO DE ÁUDIO ===\n{final_transcription}"
-        
-        transcription_tasks[task_id]["progress"] = 0.9
-        transcription_tasks[task_id]["message"] = "💾 Salvando transcrição..."
+        transcription_tasks[task_id]['progress'] = 0.9
+        transcription_tasks[task_id]['message'] = 'Transcrição concluída, salvando...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
-        # Salvar transcrição final
-        transcription_filename = f"transcription_{task_id}.txt"
-        transcription_path = TRANSCRIPTIONS_DIR / transcription_filename
-        
-        with open(transcription_path, 'w', encoding='utf-8') as f:
-            f.write(result_text)
+        # Salvar transcrição
+        transcription_file = TRANSCRIPTIONS_DIR / f"{task_id}_transcription.txt"
+        with open(transcription_file, 'w', encoding='utf-8') as f:
+            f.write(final_transcription)
         
         # Atualizar status final
         transcription_tasks[task_id].update({
-            "status": "sucesso",
-            "progress": 1.0,
-            "message": "🎉 Transcrição concluída com sucesso!",
-            "transcription": result_text,
-            "segments": all_segments_data,
-            "filename": transcription_filename,
-            "completed_at": datetime.now().isoformat()
+            'status': 'sucesso',
+            'progress': 1.0,
+            'message': 'Transcrição concluída com sucesso!',
+            'transcription': final_transcription,
+            'segments': all_segments,
+            'completed_at': datetime.now().isoformat()
         })
         save_task_to_file(task_id, transcription_tasks[task_id])
         
-        # Limpar arquivo de vídeo temporário
-        if temp_video_path and temp_video_path.exists():
-            temp_video_path.unlink()
-            
-        logger.info(f"Transcrição {task_id} concluída com sucesso")
+        # Limpar arquivos temporários
+        try:
+            audio_path.unlink()
+            video_path.unlink()
+        except:
+            pass
+        
+        logger.info(f"✅ Transcrição {task_id} concluída com sucesso!")
         
     except Exception as e:
-        logger.error(f"Erro na transcrição {task_id}: {e}")
+        logger.error(f"❌ Erro na transcrição {task_id}: {e}")
         transcription_tasks[task_id].update({
-            "status": "erro",
-            "message": f"❌ Erro: {str(e)}",
-            "progress": 0.0,
-            "completed_at": datetime.now().isoformat()
+            'status': 'erro',
+            'progress': 0.0,
+            'message': f'Erro: {str(e)}',
+            'completed_at': datetime.now().isoformat()
         })
         save_task_to_file(task_id, transcription_tasks[task_id])
 
+# Rotas da API
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_video(request: VideoTranscriptionRequest, background_tasks: BackgroundTasks):
-    """Inicia o processo de transcrição de vídeo"""
-    
-    # Validar entrada
-    if not any([request.url, request.google_drive_url, request.base64_data]):
-        raise HTTPException(
-            status_code=400, 
-            detail="É necessário fornecer url, google_drive_url ou base64_data"
+    """Endpoint para transcrição de vídeo"""
+    try:
+        task_id = str(uuid.uuid4())
+        
+        # Validar entrada
+        if not any([request.url, request.google_drive_url, request.base64_data]):
+            raise HTTPException(status_code=400, detail="Forneça uma URL, Google Drive URL ou dados base64")
+        
+        # Iniciar processamento em background
+        background_tasks.add_task(process_video_transcription, task_id, request)
+        
+        # Estimar tempo
+        estimated_time = "5-10 minutos"  # Estimativa padrão
+        
+        return TranscriptionResponse(
+            task_id=task_id,
+            status="iniciado",
+            message="Transcrição iniciada com sucesso",
+            upload_status="concluido",
+            estimated_time=estimated_time,
+            check_status_url=f"/status/{task_id}"
         )
-    
-    # Gerar ID da tarefa
-    task_id = str(uuid.uuid4())
-    
-    # Inicializar status da tarefa
-    transcription_tasks[task_id] = {
-        "status": "upload_concluido",
-        "progress": 0.0,
-        "message": "✅ Upload realizado com sucesso! Transcrição será iniciada em instantes...",
-        "created_at": datetime.now().isoformat(),
-        "transcription": None,
-        "segments": None,
-        "filename": None,
-        "completed_at": None,
-        "file_info": None
-    }
-    
-    # Salvar tarefa
-    save_task_to_file(task_id, transcription_tasks[task_id])
-    
-    # Adicionar tarefa ao background
-    background_tasks.add_task(process_video_transcription, task_id, request)
-    
-    return TranscriptionResponse(
-        task_id=task_id,
-        status="upload_concluido",
-        upload_status="sucesso",
-        message="🎉 Upload concluído com sucesso! Sua transcrição está sendo processada.",
-        estimated_time="A transcrição será iniciada em alguns segundos",
-        check_status_url=f"/status/{task_id}"
-    )
+        
+    except Exception as e:
+        logger.error(f"Erro ao iniciar transcrição: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/status/{task_id}", response_model=TranscriptionStatus)
 async def get_transcription_status(task_id: str):
-    """Obtém o status de uma transcrição"""
-    
-    # Tentar carregar da memória ou arquivo
-    task_data = transcription_tasks.get(task_id)
-    if not task_data:
-        task_data = load_task_from_file(task_id)
-        if task_data:
-            transcription_tasks[task_id] = task_data
-    
-    if not task_data:
-        raise HTTPException(status_code=404, detail="Tarefa não encontrada")
-    
-    return TranscriptionStatus(
-        task_id=task_id,
-        status=task_data["status"],
-        progress=task_data["progress"],
-        message=task_data["message"],
-        transcription=task_data.get("transcription"),
-        segments=task_data.get("segments"),
-        filename=task_data.get("filename"),
-        created_at=task_data["created_at"],
-        completed_at=task_data.get("completed_at"),
-        file_info=task_data.get("file_info")
-    )
+    """Retorna o status de uma transcrição"""
+    try:
+        task_data = transcription_tasks.get(task_id)
+        if not task_data:
+            task_data = load_task_from_file(task_id)
+        
+        if not task_data:
+            raise HTTPException(status_code=404, detail="Tarefa não encontrada")
+        
+        return TranscriptionStatus(**task_data)
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter status da tarefa {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/download/{filename}")
 async def download_transcription(filename: str):
-    """Download do arquivo de transcrição"""
-    
-    file_path = TRANSCRIPTIONS_DIR / filename
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
-        media_type='text/plain; charset=utf-8'
-    )
+    """Download de arquivo de transcrição"""
+    try:
+        file_path = TRANSCRIPTIONS_DIR / filename
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+        
+        return FileResponse(file_path, filename=filename)
+        
+    except Exception as e:
+        logger.error(f"Erro ao fazer download: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/tasks")
 async def list_tasks():
-    """Lista todas as tarefas de transcrição"""
-    return {
-        "tasks": [
-            {
-                "task_id": task_id,
-                "status": data["status"],
-                "progress": data["progress"],
-                "created_at": data["created_at"],
-                "message": data["message"]
-            }
-            for task_id, data in transcription_tasks.items()
-        ]
-    }
+    """Lista todas as tarefas"""
+    try:
+        tasks = []
+        for task_id, task_data in transcription_tasks.items():
+            tasks.append(task_data)
+        
+        # Carregar tarefas salvas
+        for task_file in TASKS_DIR.glob("*.json"):
+            task_id = task_file.stem
+            if task_id not in transcription_tasks:
+                task_data = load_task_from_file(task_id)
+                if task_data:
+                    tasks.append(task_data)
+        
+        return tasks
+        
+    except Exception as e:
+        logger.error(f"Erro ao listar tarefas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/tasks/{task_id}")
 async def delete_task(task_id: str):
-    """Remove uma tarefa da lista"""
-    
-    if task_id not in transcription_tasks:
-        raise HTTPException(status_code=404, detail="Tarefa não encontrada")
-    
-    # Remover arquivos associados se existirem
-    task_data = transcription_tasks[task_id]
-    if task_data.get("filename"):
-        file_path = TRANSCRIPTIONS_DIR / task_data["filename"]
-        if file_path.exists():
-            file_path.unlink()
-    
-    del transcription_tasks[task_id]
-    
-    return {"message": "Tarefa removida com sucesso"}
+    """Deleta uma tarefa"""
+    try:
+        if task_id in transcription_tasks:
+            del transcription_tasks[task_id]
+        
+        # Deletar arquivo salvo
+        task_file = TASKS_DIR / f"{task_id}.json"
+        if task_file.exists():
+            task_file.unlink()
+        
+        return {"message": "Tarefa deletada com sucesso"}
+        
+    except Exception as e:
+        logger.error(f"Erro ao deletar tarefa {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+# Rotas da interface web
 @app.get("/")
 async def root():
-    """Endpoint raiz - Interface web ou informações da API"""
-    return HTMLResponse(content=open("static/index.html").read(), media_type="text/html")
-
-@app.get("/auth-setup")
-async def auth_setup_page():
-    """Serve a página de configuração de autenticação OAuth"""
-    try:
-        with open("static/auth_setup.html", "r", encoding="utf-8") as f:
-            html_content = f.read()
-        return HTMLResponse(content=html_content)
-    except FileNotFoundError:
-        return HTMLResponse("""
-        <html>
-        <head><title>Configuração OAuth</title></head>
-        <body>
-            <h1>Configuração OAuth</h1>
-            <p>Página de configuração não encontrada.</p>
-            <p><a href="/">Voltar ao início</a></p>
-        </body>
-        </html>
-        """)
-
-@app.get("/api")
-async def api_info():
-    """Endpoint com informações da API"""
-    return {
-        "message": "Video Transcription API",
-        "version": "1.3.0",
-        "description": "API para transcrição de vídeos com processamento assíncrono, status em tempo real e monitoramento automático",
-        "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
-        "status_meanings": {
-            "upload_concluido": "Arquivo recebido, transcrição será iniciada",
-            "em_progresso": "Transcrição em andamento",
-            "sucesso": "Transcrição concluída com sucesso",
-            "erro": "Erro durante o processamento"
-        },
-        "endpoints": [
-            "POST /transcribe - Iniciar transcrição (resposta imediata)",
-            "GET /status/{task_id} - Verificar status da transcrição",
-            "GET /download/{filename} - Download da transcrição",
-            "GET /tasks - Listar todas as tarefas",
-            "DELETE /tasks/{task_id} - Remover tarefa",
-            "POST /monitor/start - Iniciar monitoramento automático",
-            "POST /monitor/stop - Parar monitoramento automático",
-            "GET /monitor/status - Status do monitoramento",
-            "GET /google/test-connection - Testar conexões Google"
-        ]
-    }
+    """Página principal"""
+    return FileResponse("static/index.html")
 
 @app.get("/health")
 async def health_check():
-    """Health check da API com informações detalhadas"""
-    import psutil
-    import platform
-    
+    """Verificação de saúde da API"""
     try:
-        # Informações do sistema
-        memory_info = psutil.virtual_memory()
-        disk_info = psutil.disk_usage('/')
+        import psutil
+        import platform
         
-        health_data = {
-                    "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "1.3.8",
-            "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
-            "whisper_loaded": whisper_model is not None,
-            "system_info": {
-                "platform": platform.system(),
-                "python_version": platform.python_version(),
-                "memory_usage_percent": memory_info.percent,
-                "disk_usage_percent": disk_info.percent,
-                "available_memory_gb": round(memory_info.available / (1024**3), 2)
-            },
-            "directories": {
-                "temp_exists": TEMP_DIR.exists(),
-                "downloads_exists": DOWNLOADS_DIR.exists(),
-                "transcriptions_exists": TRANSCRIPTIONS_DIR.exists()
-            }
+        # Informações do sistema
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        system_info = {
+            'memory_usage_percent': memory.percent,
+            'disk_usage_percent': disk.percent,
+            'cpu_percent': psutil.cpu_percent(),
+            'platform': platform.platform(),
+            'python_version': platform.python_version()
         }
         
-        logger.info(f"Health check OK - Memory: {memory_info.percent}%, Disk: {disk_info.percent}%")
-        return health_data
+        return {
+            "status": "healthy",
+            "version": "2.0.0",
+            "timestamp": datetime.now().isoformat(),
+            "whisper_loaded": whisper_model is not None,
+            "system_info": system_info,
+            "monitor_active": drive_monitor.monitoring_active
+        }
         
     except Exception as e:
-        logger.error(f"Health check error: {e}")
+        logger.error(f"Erro no health check: {e}")
         return {
-                    "status": "unhealthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "1.3.8",
-            "error": str(e)
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
         }
 
-# Carregar tarefas salvas na inicialização
-load_all_tasks()
-
-# ============================================================================
-# NOVAS ROTAS PARA MONITORAMENTO AUTOMÁTICO
-# ============================================================================
-
+# Rotas de monitoramento
 class MonitorStatus(BaseModel):
     active: bool
     last_check: Optional[str] = None
     processed_files_count: int
     next_check_in_seconds: Optional[int] = None
 
-class GoogleAuthRequest(BaseModel):
-    email: str
-
 @app.post("/monitor/start")
 async def start_automated_monitoring():
-    """Inicia o monitoramento automático do Google Drive"""
+    """Inicia o monitoramento automático"""
     try:
-        # Iniciar monitoramento em background
-        asyncio.create_task(drive_monitor.start_monitoring())
-        
-        return {
-            "status": "success",
-            "message": "🚀 Monitoramento automático iniciado com sucesso!",
-            "details": {
-                "folder_id": drive_monitor.drive_config['folder_id'],
-                "check_interval": drive_monitor.drive_config['monitor_interval'],
-                "destination_email": drive_monitor.email_config['destination_email']
-            }
-        }
+        await drive_monitor.start_monitoring()
+        return {"message": "Monitoramento iniciado com sucesso"}
     except Exception as e:
         logger.error(f"Erro ao iniciar monitoramento: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao iniciar monitoramento: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/monitor/stop")
 async def stop_automated_monitoring():
     """Para o monitoramento automático"""
     try:
         drive_monitor.stop_monitoring()
-        
-        return {
-            "status": "success",
-            "message": "🛑 Monitoramento automático parado com sucesso!"
-        }
+        return {"message": "Monitoramento parado com sucesso"}
     except Exception as e:
         logger.error(f"Erro ao parar monitoramento: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao parar monitoramento: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/monitor/status", response_model=MonitorStatus)
 async def get_monitor_status():
-    """Obtém o status do monitoramento automático"""
+    """Retorna o status do monitoramento"""
     try:
         return MonitorStatus(
             active=drive_monitor.monitoring_active,
-            last_check=None,  # Pode ser implementado para rastrear último check
+            last_check=drive_monitor.last_check.isoformat() if hasattr(drive_monitor, 'last_check') and drive_monitor.last_check else None,
             processed_files_count=len(drive_monitor.processed_files),
-            next_check_in_seconds=drive_monitor.drive_config['monitor_interval'] if drive_monitor.monitoring_active else None
+            next_check_in_seconds=drive_monitor.check_interval if hasattr(drive_monitor, 'check_interval') else None
         )
     except Exception as e:
         logger.error(f"Erro ao obter status do monitoramento: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao obter status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/monitor/check-now")
 async def check_new_videos_now():
-    """Força uma verificação imediata de novos vídeos"""
+    """Verifica novos vídeos imediatamente"""
     try:
         new_videos = await drive_monitor.check_new_videos()
         
-        return {
-            "status": "success",
-            "message": f"🔍 Verificação concluída - {len(new_videos)} novos vídeos encontrados",
-            "new_videos": new_videos
-        }
+        if new_videos:
+            # Processar vídeos encontrados
+            for video in new_videos:
+                await drive_monitor.process_video(video)
+            
+            return {
+                "message": f"Verificação concluída. {len(new_videos)} novos vídeos processados.",
+                "new_videos": new_videos
+            }
+        else:
+            return {
+                "message": "Verificação concluída. Nenhum novo vídeo encontrado.",
+                "new_videos": []
+            }
+            
     except Exception as e:
         logger.error(f"Erro na verificação manual: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro na verificação: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+# Rotas de configuração do Google
 @app.get("/google/auth-url")
 async def get_google_auth_url():
     """Gera URL de autenticação do Google"""
     try:
-        # Debug: verificar configurações
-        logger.info("🔍 Verificando configurações OAuth...")
+        from google_config import get_google_credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
         
-        # Verificar se as variáveis de ambiente estão disponíveis
-        client_id = os.environ.get("GOOGLE_CLIENT_ID")
-        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
-        redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+        creds = get_google_credentials()
+        scopes = creds['scopes']
         
-        logger.info(f"Client ID from env: {'Sim' if client_id else 'Não'}")
-        logger.info(f"Client Secret from env: {'Sim' if client_secret else 'Não'}")
-        logger.info(f"Redirect URI from env: {redirect_uri}")
-        
-        # Verificar se as credenciais estão configuradas
-        if not client_id or not client_secret:
-            raise Exception("Credenciais do Google não configuradas. Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no Easypanel.")
-        
-        # Importar módulos necessários
-        try:
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            from google_config import GOOGLE_SCOPES
-        except ImportError as e:
-            logger.error(f"Erro ao importar módulos Google: {e}")
-            raise Exception(f"Erro ao importar módulos Google: {str(e)}")
-        
-        # Criar fluxo de autenticação
         flow = InstalledAppFlow.from_client_config(
             {
                 "installed": {
-                    "client_id": client_id,
-                    "project_id": "video-transcription-api",
+                    "client_id": creds['client_id'],
+                    "client_secret": creds['client_secret'],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                    "client_secret": client_secret,
-                    "redirect_uris": [redirect_uri]
+                    "redirect_uris": [creds['redirect_uri']]
                 }
             },
-            GOOGLE_SCOPES
+            scopes=scopes
         )
         
-        # Salvar o fluxo para usar no callback
-        try:
-            with open('oauth_flow.pickle', 'wb') as f:
-                pickle.dump(flow, f)
-        except Exception as e:
-            logger.error(f"Erro ao salvar fluxo OAuth: {e}")
-            raise Exception(f"Erro ao salvar fluxo OAuth: {str(e)}")
+        auth_url, _ = flow.authorization_url(
+            access_type='offline',
+            include_granted_scopes='true',
+            redirect_uri=creds['redirect_uri']
+        )
         
-        # Gerar URL de autenticação
-        try:
-            auth_url, _ = flow.authorization_url(
-                access_type='offline',
-                prompt='consent',
-                include_granted_scopes='true',
-                redirect_uri=redirect_uri
-            )
-        except Exception as e:
-            logger.error(f"Erro ao gerar URL de autorização: {e}")
-            raise Exception(f"Erro ao gerar URL de autorização: {str(e)}")
+        return {"auth_url": auth_url}
         
-        logger.info("✅ URL de autenticação gerada com sucesso")
-        
-        return {
-            "auth_url": auth_url,
-            "message": "Acesse esta URL para autorizar o acesso ao Google Drive e Gmail"
-        }
     except Exception as e:
         logger.error(f"Erro ao gerar URL de autenticação: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao gerar URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/auth/callback")
 async def oauth_callback(code: str = None, error: str = None):
-    """Endpoint de callback para OAuth2"""
+    """Callback do OAuth"""
     try:
         if error:
-            logger.error(f"Erro no OAuth: {error}")
             return HTMLResponse(f"""
             <html>
             <head><title>Erro de Autenticação</title></head>
             <body>
-                <h1>❌ Erro de Autenticação</h1>
+                <h1>Erro de Autenticação</h1>
                 <p>Erro: {error}</p>
-                <p><a href="/">Voltar ao início</a></p>
+                <a href="/">Voltar ao início</a>
             </body>
             </html>
             """)
@@ -837,70 +714,53 @@ async def oauth_callback(code: str = None, error: str = None):
         if not code:
             return HTMLResponse("""
             <html>
-            <head><title>Erro de Autenticação</title></head>
+            <head><title>Erro</title></head>
             <body>
-                <h1>❌ Código de autorização não recebido</h1>
-                <p><a href="/">Voltar ao início</a></p>
+                <h1>Erro</h1>
+                <p>Código de autorização não fornecido</p>
+                <a href="/">Voltar ao início</a>
             </body>
             </html>
             """)
         
-        # Carregar o fluxo salvo
-        try:
-            with open('oauth_flow.pickle', 'rb') as f:
-                flow = pickle.load(f)
-        except FileNotFoundError:
-            return HTMLResponse("""
-            <html>
-            <head><title>Erro de Autenticação</title></head>
-            <body>
-                <h1>❌ Sessão de autenticação expirada</h1>
-                <p>Por favor, inicie o processo de autenticação novamente.</p>
-                <p><a href="/">Voltar ao início</a></p>
-            </body>
-            </html>
-            """)
+        # Processar código de autorização
+        from google_config import get_google_credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
         
-        # Trocar o código por tokens
+        creds = get_google_credentials()
+        scopes = creds['scopes']
+        
+        flow = InstalledAppFlow.from_client_config(
+            {
+                "installed": {
+                    "client_id": creds['client_id'],
+                    "client_secret": creds['client_secret'],
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": [creds['redirect_uri']]
+                }
+            },
+            scopes=scopes
+        )
+        
         flow.fetch_token(code=code)
         
-        # Salvar as credenciais
-        credentials = flow.credentials
-        creds_data = {
-            'token': credentials.token,
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
-        }
-        
-        with open('token.json', 'w') as f:
-            json.dump(creds_data, f)
-        
-        # Limpar o arquivo de fluxo
-        try:
-            os.remove('oauth_flow.pickle')
-        except:
-            pass
-        
-        logger.info("✅ Autenticação OAuth concluída com sucesso!")
+        # Salvar credenciais
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(flow.credentials, token)
         
         return HTMLResponse(f"""
         <html>
-        <head>
-            <title>Autenticação Concluída</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }}
-                .success {{ color: #28a745; }}
-                .info {{ color: #17a2b8; }}
-            </style>
-        </head>
+        <head><title>Autenticação Concluída</title></head>
         <body>
-            <h1 class="success">✅ Autenticação Concluída!</h1>
-            <p class="info">As credenciais do Google foram configuradas com sucesso.</p>
-            <p>Você pode fechar esta janela e voltar à interface principal.</p>
-            <p><a href="/">Voltar ao início</a></p>
+            <h1>✅ Autenticação Concluída!</h1>
+            <p>As credenciais do Google foram configuradas com sucesso.</p>
+            <p>Você pode fechar esta janela e voltar à aplicação.</p>
+            <script>
+                setTimeout(() => {{
+                    window.close();
+                }}, 3000);
+            </script>
         </body>
         </html>
         """)
@@ -909,270 +769,200 @@ async def oauth_callback(code: str = None, error: str = None):
         logger.error(f"Erro no callback OAuth: {e}")
         return HTMLResponse(f"""
         <html>
-        <head><title>Erro de Autenticação</title></head>
+        <head><title>Erro</title></head>
         <body>
-            <h1>❌ Erro durante a autenticação</h1>
+            <h1>Erro de Autenticação</h1>
             <p>Erro: {str(e)}</p>
-            <p><a href="/">Voltar ao início</a></p>
+            <a href="/">Voltar ao início</a>
         </body>
         </html>
         """)
 
 @app.get("/google/test-connection")
 async def test_google_connection():
-    """Testa conexão com Google APIs"""
+    """Testa a conexão com Google APIs"""
     try:
+        # Testar Drive
         drive_service = DriveService()
-        gmail_service = GmailService()
+        drive_status = await drive_service.test_connection()
         
-        drive_ok = await drive_service.test_connection()
-        gmail_ok = await gmail_service.test_connection()
+        # Testar Gmail
+        gmail_service = GmailService()
+        gmail_status = await gmail_service.test_connection()
         
         return {
-            "drive_connection": "✅ OK" if drive_ok else "❌ FALHA",
-            "gmail_connection": "✅ OK" if gmail_ok else "❌ FALHA",
-            "drive_user_email": drive_service.get_user_email() if drive_ok else None,
-            "gmail_user_email": gmail_service.get_user_email() if gmail_ok else None
+            "drive_connection": "✅ OK" if drive_status else "❌ Erro",
+            "gmail_connection": "✅ OK" if gmail_status else "❌ Erro",
+            "overall_status": "✅ OK" if (drive_status and gmail_status) else "❌ Erro"
         }
+        
     except Exception as e:
-        logger.error(f"Erro ao testar conexões Google: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro nos testes: {str(e)}")
+        logger.error(f"Erro no teste de conexão Google: {e}")
+        return {
+            "drive_connection": "❌ Erro",
+            "gmail_connection": "❌ Erro",
+            "overall_status": "❌ Erro",
+            "error": str(e)
+        }
 
 @app.get("/google/debug-config")
 async def debug_google_config():
-    """Debug: verifica configurações do Google"""
+    """Retorna configurações do Google para debug"""
     try:
-        from google_config import get_google_credentials
+        from google_config import get_drive_config, get_email_config
         
-        creds = get_google_credentials()
+        drive_config = get_drive_config()
+        email_config = get_email_config()
         
         return {
-            "client_id_configured": bool(creds['client_id']),
-            "client_secret_configured": bool(creds['client_secret']),
-            "redirect_uri": creds['redirect_uri'],
-            "client_id_preview": creds['client_id'][:10] + "..." if creds['client_id'] else "Não configurado",
-            "client_secret_preview": creds['client_secret'][:10] + "..." if creds['client_secret'] else "Não configurado",
-            "environment_vars": {
-                "GOOGLE_CLIENT_ID": os.environ.get("GOOGLE_CLIENT_ID", "Não configurado"),
-                "GOOGLE_CLIENT_SECRET": os.environ.get("GOOGLE_CLIENT_SECRET", "Não configurado"),
-                "GOOGLE_REDIRECT_URI": os.environ.get("GOOGLE_REDIRECT_URI", "Não configurado")
-            }
+            "drive_config": drive_config,
+            "email_config": {
+                "destination_email": email_config['destination_email'],
+                "sender_name": email_config['sender_name']
+            },
+            "monitor_interval": drive_config['monitor_interval'],
+            "max_file_size": drive_config['max_file_size']
         }
+        
     except Exception as e:
-        logger.error(f"Erro ao debug configurações: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro no debug: {str(e)}")
+        logger.error(f"Erro ao obter configurações: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/google/test-deps")
 async def test_google_dependencies():
-    """Testa se as dependências do Google estão funcionando"""
+    """Testa dependências do Google"""
     try:
-        # Testar imports
-        import_results = {}
+        results = {}
         
+        # Testar imports
         try:
             from google_auth_oauthlib.flow import InstalledAppFlow
-            import_results["google_auth_oauthlib"] = "✅ OK"
+            results['google_auth_oauthlib'] = "✅ OK"
         except ImportError as e:
-            import_results["google_auth_oauthlib"] = f"❌ Erro: {str(e)}"
+            results['google_auth_oauthlib'] = f"❌ Erro: {e}"
         
         try:
             from google.oauth2.credentials import Credentials
-            import_results["google.oauth2.credentials"] = "✅ OK"
+            results['google_oauth2'] = "✅ OK"
         except ImportError as e:
-            import_results["google.oauth2.credentials"] = f"❌ Erro: {str(e)}"
+            results['google_oauth2'] = f"❌ Erro: {e}"
+        
+        try:
+            from google.auth.transport.requests import Request
+            results['google_auth_transport'] = "✅ OK"
+        except ImportError as e:
+            results['google_auth_transport'] = f"❌ Erro: {e}"
         
         try:
             from googleapiclient.discovery import build
-            import_results["googleapiclient.discovery"] = "✅ OK"
+            results['googleapiclient'] = "✅ OK"
         except ImportError as e:
-            import_results["googleapiclient.discovery"] = f"❌ Erro: {str(e)}"
+            results['googleapiclient'] = f"❌ Erro: {e}"
         
-        # Testar variáveis de ambiente
-        env_vars = {
-            "GOOGLE_CLIENT_ID": os.environ.get("GOOGLE_CLIENT_ID", "Não configurado"),
-            "GOOGLE_CLIENT_SECRET": os.environ.get("GOOGLE_CLIENT_SECRET", "Não configurado"),
-            "GOOGLE_REDIRECT_URI": os.environ.get("GOOGLE_REDIRECT_URI", "Não configurado")
-        }
+        # Testar arquivos de configuração
+        config_files = ['gmail_credentials.json', 'token.pickle']
+        for file in config_files:
+            if Path(file).exists():
+                results[f'file_{file}'] = "✅ Existe"
+            else:
+                results[f'file_{file}'] = "❌ Não encontrado"
         
-        return {
-            "imports": import_results,
-            "environment_variables": env_vars,
-            "all_imports_ok": all("✅ OK" in result for result in import_results.values()),
-            "all_env_vars_ok": all("Não configurado" not in value for value in env_vars.values())
-        }
+        return results
+        
     except Exception as e:
-        logger.error(f"Erro ao testar dependências: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro no teste: {str(e)}")
+        logger.error(f"Erro no teste de dependências: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/google/setup-auth")
 async def setup_google_auth():
-    """Configura autenticação OAuth persistente"""
+    """Configura autenticação do Google"""
     try:
-        # Importar módulos necessários
+        from google_config import get_google_credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
-        from google_config import GOOGLE_SCOPES
         
-        # Verificar variáveis de ambiente
-        client_id = os.environ.get("GOOGLE_CLIENT_ID")
-        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
-        redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+        creds = get_google_credentials()
+        scopes = creds['scopes']
         
-        if not client_id or not client_secret:
-            return {
-                "status": "error",
-                "message": "❌ Variáveis de ambiente não configuradas",
-                "error": "Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no Easypanel"
-            }
-        
-        # Criar fluxo OAuth
         flow = InstalledAppFlow.from_client_config(
             {
                 "installed": {
-                    "client_id": client_id,
-                    "project_id": "video-transcription-api",
+                    "client_id": creds['client_id'],
+                    "client_secret": creds['client_secret'],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                    "client_secret": client_secret,
-                    "redirect_uris": [redirect_uri]
+                    "redirect_uris": [creds['redirect_uri']]
                 }
             },
-            GOOGLE_SCOPES
+            scopes=scopes
         )
         
-        # Gerar URL de autenticação
-        auth_url, state = flow.authorization_url(
+        auth_url, _ = flow.authorization_url(
             access_type='offline',
-            prompt='consent',
-            include_granted_scopes='true'
+            include_granted_scopes='true',
+            redirect_uri=creds['redirect_uri']
         )
         
-        # Salvar apenas os dados necessários (não o objeto flow)
-        flow_data = {
-            'client_id': client_id,
-            'client_secret': client_secret,
-            'redirect_uri': redirect_uri,
-            'scopes': GOOGLE_SCOPES,
-            'state': state
-        }
-        
-        with open('oauth_flow_data.json', 'w') as f:
-            json.dump(flow_data, f)
-        
-        logger.info("✅ URL de autenticação gerada com sucesso")
-        
-        return {
-            "status": "success",
-            "message": "✅ URL de autenticação gerada com sucesso!",
-            "auth_url": auth_url,
-            "output": f"URL gerada: {auth_url}"
-        }
+        return {"auth_url": auth_url}
         
     except Exception as e:
-        logger.error(f"Erro ao gerar URL de autenticação: {e}")
-        return {
-            "status": "error",
-            "message": "❌ Erro ao gerar URL de autenticação",
-            "error": str(e)
-        }
+        logger.error(f"Erro na configuração de autenticação: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/google/complete-auth")
 async def complete_google_auth(code: str):
-    """Completa a autenticação OAuth com o código recebido"""
+    """Completa autenticação do Google"""
     try:
-        # Carregar os dados do fluxo
-        try:
-            with open('oauth_flow_data.json', 'r') as f:
-                flow_data = json.load(f)
-        except FileNotFoundError:
-            return {
-                "status": "error",
-                "message": "❌ Sessão de autenticação expirada",
-                "error": "Por favor, inicie o processo de autenticação novamente"
-            }
+        from google_config import get_google_credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
         
-        # Recriar o fluxo OAuth
+        creds = get_google_credentials()
+        scopes = creds['scopes']
+        
         flow = InstalledAppFlow.from_client_config(
             {
                 "installed": {
-                    "client_id": flow_data['client_id'],
-                    "project_id": "video-transcription-api",
+                    "client_id": creds['client_id'],
+                    "client_secret": creds['client_secret'],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                    "client_secret": flow_data['client_secret'],
-                    "redirect_uris": [flow_data['redirect_uri']]
+                    "redirect_uris": [creds['redirect_uri']]
                 }
             },
-            flow_data['scopes']
+            scopes=scopes
         )
         
-        # Trocar o código por tokens
         flow.fetch_token(code=code)
         
-        # Salvar as credenciais
-        credentials = flow.credentials
-        creds_data = {
-            'token': credentials.token,
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
-        }
+        # Salvar credenciais
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(flow.credentials, token)
         
-        with open('token.json', 'w') as f:
-            json.dump(creds_data, f)
-        
-        # Limpar o arquivo de fluxo
-        try:
-            os.remove('oauth_flow_data.json')
-        except:
-            pass
-        
-        logger.info("✅ Autenticação OAuth concluída com sucesso!")
-        
-        return {
-            "status": "success",
-            "message": "🎉 Autenticação OAuth concluída com sucesso!",
-            "output": "As credenciais foram salvas em token.json"
-        }
+        return {"message": "Autenticação concluída com sucesso"}
         
     except Exception as e:
         logger.error(f"Erro ao completar autenticação: {e}")
-        return {
-            "status": "error",
-            "message": "❌ Erro ao completar autenticação",
-            "error": str(e)
-        }
+        raise HTTPException(status_code=500, detail=str(e))
+
+class GoogleAuthRequest(BaseModel):
+    email: str
 
 @app.post("/google/send-test-email")
 async def send_test_email(request: GoogleAuthRequest):
     """Envia email de teste"""
     try:
         gmail_service = GmailService()
-        
-        success = await gmail_service.send_simple_email(
-            to_email=request.email,
-            subject="🧪 Teste - API de Transcrição",
-            body="Este é um email de teste da API de Transcrição de Vídeos. Se você recebeu este email, a configuração do Gmail está funcionando corretamente!"
-        )
-        
-        if success:
-            return {
-                "status": "success",
-                "message": f"📧 Email de teste enviado para {request.email}"
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Falha ao enviar email de teste")
-            
+        await gmail_service.send_test_email(request.email)
+        return {"message": "Email de teste enviado com sucesso"}
     except Exception as e:
         logger.error(f"Erro ao enviar email de teste: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.8")
-logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
-logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
-logger.info("Aplicação pronta para receber requisições!")
-logger.info("=" * 50)
+# Inicialização
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Carregar tarefas salvas
+    load_all_tasks()
+    
+    # Iniciar servidor
+    uvicorn.run(app, host="0.0.0.0", port=8000)

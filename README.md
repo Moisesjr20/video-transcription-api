@@ -1,221 +1,210 @@
-# 🎬 API de Transcrição de Vídeos com Monitoramento Automático
+# 🤖 Transcritor Automático - Google Drive
 
-API FastAPI robusta para transcrição automática de vídeos com **monitoramento automático** de pastas do Google Drive e envio de transcrições por email.
+Uma aplicação inteligente que monitora automaticamente uma pasta compartilhada do Google Drive e transcreve vídeos automaticamente usando IA.
 
-## 🚀 Recursos
+## ✨ Funcionalidades
 
-- 🤖 **Automação completa** para download do Google Drive
-- 📁 **Monitoramento automático** de pastas do Google Drive
-- 📧 **Envio automático** de transcrições por email
-- 🎬 **Divisão automática** de vídeos longos
-- 🔊 **Transcrição com Whisper AI**
-- 🌐 **API RESTful** com interface Swagger
-- 🎨 **Interface web moderna** para gerenciamento
-- 🐳 **Deploy fácil** com Docker
+- **🔍 Monitoramento Automático**: Verifica periodicamente uma pasta do Google Drive
+- **🎬 Transcrição Inteligente**: Usa Whisper AI para transcrições precisas
+- **📧 Notificações por Email**: Envia transcrições automaticamente por email
+- **🌐 Interface Web Moderna**: Dashboard intuitivo para controle e monitoramento
+- **⚡ Processamento Assíncrono**: Não trava a aplicação durante transcrições
+- **📊 Histórico Completo**: Mantém registro de todas as transcrições
 
-## 🔄 **NOVA FUNCIONALIDADE: Monitoramento Automático**
+## 🚀 Como Funciona
 
-### ✨ O que faz:
-- 🔍 **Monitora automaticamente** uma pasta específica do Google Drive
-- 📹 **Detecta novos vídeos** assim que são adicionados
-- 🎬 **Transcreve automaticamente** cada novo vídeo
-- 📧 **Envia transcrição por email** com formatação HTML
-- 🔄 **Processa em background** sem intervenção manual
+1. **Configuração**: Configure as credenciais do Google e email de destino
+2. **Monitoramento**: A aplicação verifica a pasta a cada 5 minutos
+3. **Detecção**: Novos vídeos são automaticamente identificados
+4. **Transcrição**: Vídeos são baixados e transcritos usando Whisper AI
+5. **Notificação**: Transcrições são enviadas por email automaticamente
 
-### 🎯 Caso de uso perfeito:
-- Reuniões gravadas automaticamente no Google Drive
-- Transcrições enviadas por email assim que concluídas
-- Zero intervenção manual necessária
+## 📁 Pasta Monitorada
 
-## 🚀 Deploy no EasyPanel
+A aplicação monitora esta pasta do Google Drive:
+[📁 Pasta de Vídeos](https://drive.google.com/drive/folders/14BFqXqjV1MsQIkafQ8oWPPvKASnQLiQG?usp=sharing)
 
-### Método 1: Git Repository
-1. Fork este repositório
-2. No EasyPanel: New Project → Git Repository
-3. Cole a URL do seu fork
-4. Deploy automático com `easypanel.yml`
+## 🛠️ Tecnologias
 
-### Método 2: Docker Compose
-```bash
-git clone <seu-repo>
-cd video-transcription-api
-docker-compose up -d
-```
+- **Backend**: FastAPI + Python
+- **IA**: OpenAI Whisper
+- **Google APIs**: Drive + Gmail
+- **Frontend**: HTML5 + CSS3 + JavaScript
+- **Deploy**: Docker + Easypanel
 
-## 📖 Uso da API
+## 📋 Pré-requisitos
 
-### 🌐 Interface Web
-Acesse `http://localhost:8000` para usar a interface web moderna com:
-- 📊 Dashboard em tempo real
-- 🎮 Controles de monitoramento
-- 📧 Testes de email
-- 📈 Logs de atividade
-
-### Transcrever vídeo manualmente
-```bash
-curl -X POST "http://localhost:8000/transcribe" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "google_drive_url": "https://drive.google.com/uc?id=FILE_ID&export=download",
-    "language": "pt"
-  }'
-```
-
-### Verificar status
-```bash
-curl "http://localhost:8000/status/TASK_ID"
-```
-
-## 🔧 **Novos Endpoints de Monitoramento**
-
-### Iniciar monitoramento automático
-```bash
-curl -X POST "http://localhost:8000/monitor/start"
-```
-
-### Verificar status do monitoramento
-```bash
-curl "http://localhost:8000/monitor/status"
-```
-
-### Forçar verificação de novos vídeos
-```bash
-curl -X POST "http://localhost:8000/monitor/check-now"
-```
-
-### Parar monitoramento
-```bash
-curl -X POST "http://localhost:8000/monitor/stop"
-```
-
-### Testar conexão com Google APIs
-```bash
-curl "http://localhost:8000/google/test-connection"
-```
-
-### Enviar email de teste
-```bash
-curl -X POST "http://localhost:8000/google/send-test-email" \
-  -H "Content-Type: application/json" \
-  -d '{"email": "seu-email@gmail.com"}'
-```
-
-## ⚙️ Configuração do Monitoramento Automático
-
-### 1. Configurar credenciais Google
-Edite `google_config.py`:
-```python
-# Seu ID e chave secreta do Google
-GOOGLE_CLIENT_ID = "seu-client-id"
-GOOGLE_CLIENT_SECRET = "sua-client-secret"
-
-# ID da pasta do Google Drive para monitorar
-GOOGLE_DRIVE_FOLDER_ID = "14BFqXqjV1MsQIkafQ8oWPPvKASnQLiQG"
-
-# Email de destino para transcrições
-DESTINATION_EMAIL = "seu-email@gmail.com"
-```
-
-### 2. Configurar Google Console
-1. Acesse [Google Cloud Console](https://console.cloud.google.com/)
-2. Crie um projeto ou selecione existente
-3. Ative as APIs:
-   - Google Drive API
-   - Gmail API
-4. Configure OAuth2:
-   - Tipo: Aplicação Desktop
-   - URIs de redirecionamento: `http://localhost:8000/auth/callback`
-
-### 3. Executar script de configuração
-```bash
-python setup_google_auth.py
-```
-
-## 🔧 Endpoints Completos
-
-### Transcrição
-- `POST /transcribe` - Iniciar transcrição
-- `GET /status/{task_id}` - Verificar progresso
-- `GET /download/{filename}` - Download da transcrição
-
-### Monitoramento Automático
-- `POST /monitor/start` - Iniciar monitoramento
-- `POST /monitor/stop` - Parar monitoramento
-- `GET /monitor/status` - Status do monitoramento
-- `POST /monitor/check-now` - Verificar vídeos agora
-
-### Google APIs
-- `GET /google/auth-url` - URL de autenticação
-- `GET /google/test-connection` - Testar conexões
-- `POST /google/send-test-email` - Email de teste
-
-### Sistema
-- `GET /health` - Health check
-- `GET /` - Interface Swagger UI
+- Python 3.8+
+- Conta Google com APIs habilitadas
+- Acesso à pasta compartilhada do Google Drive
 
 ## ⚙️ Configuração
 
-### Recursos Mínimos
-- 2GB RAM, 1 CPU
-- 10GB armazenamento
+### 1. Variáveis de Ambiente
 
-### Recursos Recomendados
-- 4GB RAM, 2 CPU
-- Conexão estável com internet
+Configure no Easypanel:
 
-## 🛠️ Desenvolvimento Local
-
-```bash
-pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000
+```env
+GOOGLE_CLIENT_ID=seu_client_id
+GOOGLE_CLIENT_SECRET=seu_client_secret
+GOOGLE_REDIRECT_URI=https://seu-dominio.easypanel.host/auth/callback
+GOOGLE_DRIVE_FOLDER_ID=14BFqXqjV1MsQIkafQ8oWPPvKASnQLiQG
+DESTINATION_EMAIL=seu-email@gmail.com
 ```
 
-### 🎨 Testar Interface Web
+### 2. Google Cloud Console
+
+1. Acesse [Google Cloud Console](https://console.cloud.google.com/)
+2. Crie um projeto ou selecione existente
+3. Habilite as APIs:
+   - Google Drive API
+   - Gmail API
+4. Configure OAuth 2.0:
+   - Tipo: Aplicação Web
+   - URIs autorizados: `https://seu-dominio.easypanel.host`
+   - URIs de redirecionamento: `https://seu-dominio.easypanel.host/auth/callback`
+
+### 3. Autenticação
+
+1. Acesse a interface web
+2. Clique em "Configurar Auth" na seção Google
+3. Autorize o acesso às APIs
+4. Teste a conexão
+
+## 🎯 Uso
+
+### Interface Web
+
+Acesse a interface web para:
+
+- **📊 Dashboard**: Visualizar status do monitoramento
+- **🎛️ Controles**: Iniciar/parar monitoramento
+- **🔍 Verificação Manual**: Verificar novos vídeos agora
+- **📧 Teste de Email**: Enviar email de teste
+- **📋 Histórico**: Ver transcrições recentes
+
+### Monitoramento Automático
+
+1. **Iniciar**: Clique em "Iniciar Monitoramento"
+2. **Configurar**: O sistema verifica a pasta a cada 5 minutos
+3. **Processar**: Novos vídeos são automaticamente transcritos
+4. **Notificar**: Transcrições são enviadas por email
+
+### Formatos Suportados
+
+- **Vídeos**: MP4, AVI, MOV, MKV, WMV, FLV, WebM, M4V, 3GP
+- **Tamanho Máximo**: 500 MB por arquivo
+- **Idiomas**: Português (padrão), Inglês, Espanhol
+
+## 📧 Emails Automáticos
+
+Cada transcrição gera um email com:
+
+- **📁 Nome do arquivo**
+- **📅 Data e hora**
+- **📏 Tamanho do arquivo**
+- **📝 Transcrição completa**
+- **🎨 Layout HTML responsivo**
+
+## 🔧 Endpoints da API
+
+### Monitoramento
+- `POST /monitor/start` - Iniciar monitoramento
+- `POST /monitor/stop` - Parar monitoramento
+- `GET /monitor/status` - Status do monitoramento
+- `POST /monitor/check-now` - Verificar agora
+
+### Transcrição
+- `POST /transcribe` - Iniciar transcrição manual
+- `GET /status/{task_id}` - Status da transcrição
+- `GET /tasks` - Listar todas as tarefas
+
+### Google
+- `GET /google/test-connection` - Testar conexão
+- `GET /google/setup-auth` - Configurar autenticação
+- `POST /google/send-test-email` - Enviar email de teste
+
+## 🐳 Deploy com Docker
+
 ```bash
-python test_interface.py
+# Build da imagem
+docker build -t transcritor-automatico .
+
+# Executar container
+docker run -d \
+  -p 8000:8000 \
+  -e GOOGLE_CLIENT_ID=seu_id \
+  -e GOOGLE_CLIENT_SECRET=seu_secret \
+  -e DESTINATION_EMAIL=seu@email.com \
+  transcritor-automatico
 ```
 
 ## 📊 Monitoramento
 
-```bash
-# Health check
-curl http://localhost:8000/health
+### Logs
+- **🔍 Verificação**: Logs de verificação da pasta
+- **🎬 Processamento**: Status de cada vídeo processado
+- **📧 Email**: Confirmação de envio de emails
+- **❌ Erros**: Detalhes de erros e falhas
 
-# Status do monitoramento
-curl http://localhost:8000/monitor/status
+### Métricas
+- **📹 Vídeos Processados**: Contador total
+- **⏰ Última Verificação**: Timestamp da última verificação
+- **📊 Status**: Ativo/Inativo
+- **📧 Conexão Google**: Drive e Gmail
 
-# Logs Docker
-docker logs video-transcription-api
-```
+## 🔒 Segurança
 
-## 🔄 Fluxo de Monitoramento Automático
+- **🔐 OAuth 2.0**: Autenticação segura do Google
+- **📁 Arquivos Temporários**: Limpeza automática
+- **🔒 Variáveis de Ambiente**: Credenciais protegidas
+- **🌐 HTTPS**: Comunicação criptografada
 
-1. **Configuração inicial**:
-   - Configure credenciais Google
-   - Execute script de setup
-   - Inicie monitoramento
+## 🚨 Troubleshooting
 
-2. **Funcionamento automático**:
-   - API verifica pasta a cada 5 minutos
-   - Detecta novos vídeos automaticamente
-   - Inicia transcrição em background
-   - Envia resultado por email
+### Erro 400 OAuth
+1. Verifique as URIs no Google Cloud Console
+2. Confirme o redirect_uri nas variáveis de ambiente
+3. Limpe o cache do navegador
+4. Regenere as credenciais OAuth
 
-3. **Resultado**:
-   - Transcrição formatada em HTML
-   - Informações do vídeo (tamanho, duração)
-   - Task ID para rastreamento
+### Vídeos não processados
+1. Verifique o tamanho do arquivo (máx. 500MB)
+2. Confirme se é um formato suportado
+3. Verifique as permissões da pasta do Drive
+4. Teste a conexão Google
 
-## 📧 Formato do Email
+### Emails não enviados
+1. Teste a conexão Gmail
+2. Verifique o email de destino
+3. Confirme as permissões do Gmail API
+4. Envie email de teste
 
-O email de transcrição inclui:
-- 📁 Nome do arquivo
-- 📅 Data e hora
-- ⏱️ Duração do vídeo
-- 📏 Tamanho do arquivo
-- 📝 Transcrição completa
-- 🔗 Task ID para rastreamento
+## 📈 Versões
+
+- **v2.0.0**: Monitoramento automático completo
+- **v1.3.8**: API de transcrição manual
+- **v1.0.0**: Versão inicial
+
+## 🤝 Contribuição
+
+1. Fork o projeto
+2. Crie uma branch para sua feature
+3. Commit suas mudanças
+4. Push para a branch
+5. Abra um Pull Request
+
+## 📄 Licença
+
+Este projeto está sob a licença MIT. Veja o arquivo LICENSE para detalhes.
+
+## 📞 Suporte
+
+Para suporte ou dúvidas:
+- 📧 Email: [seu-email@gmail.com]
+- 🐛 Issues: [GitHub Issues]
+- 📖 Documentação: [Wiki do Projeto]
 
 ---
 
-**Desenvolvido para automação completa de transcrição de vídeos** 🎯 
+**🎉 Transforme sua pasta do Google Drive em um sistema inteligente de transcrição!** 

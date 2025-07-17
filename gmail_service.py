@@ -191,6 +191,36 @@ class GmailService:
             logger.error(f"Erro ao enviar email: {e}")
             return False
     
+    async def send_html_email(self, to_email: str, subject: str, html_content: str) -> bool:
+        """Envia email HTML"""
+        try:
+            if not self.service:
+                logger.error("Serviço do Gmail não inicializado")
+                return False
+            
+            # Criar mensagem
+            message = self.create_message(to_email, subject, html_content)
+            
+            if not message:
+                logger.error("Falha ao criar mensagem")
+                return False
+            
+            # Enviar email
+            sent_message = self.service.users().messages().send(
+                userId='me',
+                body=message
+            ).execute()
+            
+            logger.info(f"📧 Email HTML enviado com sucesso: {sent_message.get('id')}")
+            return True
+            
+        except HttpError as error:
+            logger.error(f"Erro HTTP do Gmail: {error}")
+            return False
+        except Exception as e:
+            logger.error(f"Erro ao enviar email HTML: {e}")
+            return False
+    
     async def send_simple_email(self, to_email: str, subject: str, body: str) -> bool:
         """Envia email simples"""
         try:
@@ -244,4 +274,48 @@ class GmailService:
             
         except Exception as e:
             logger.error(f"Erro ao obter email do usuário: {e}")
-            return None 
+            return None
+    
+    async def send_test_email(self, to_email: str) -> bool:
+        """Envia email de teste"""
+        try:
+            subject = "🧪 Teste - Transcritor Automático"
+            html_content = """
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .header { background-color: #4285f4; color: white; padding: 15px; border-radius: 5px; }
+                    .content { margin: 20px 0; }
+                    .footer { color: #666; font-size: 12px; margin-top: 20px; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h2>🧪 Teste de Email</h2>
+                </div>
+                
+                <div class="content">
+                    <h3>✅ Configuração do Gmail Funcionando!</h3>
+                    <p>Este é um email de teste do <strong>Transcritor Automático</strong>.</p>
+                    <p>Se você recebeu este email, significa que:</p>
+                    <ul>
+                        <li>✅ A autenticação OAuth está funcionando</li>
+                        <li>✅ O Gmail API está configurado corretamente</li>
+                        <li>✅ O sistema pode enviar emails automaticamente</li>
+                    </ul>
+                </div>
+                
+                <div class="footer">
+                    <p>Este email foi enviado automaticamente pelo sistema de transcrição.</p>
+                    <p>Data: {date}</p>
+                </div>
+            </body>
+            </html>
+            """.format(date=datetime.now().strftime("%d/%m/%Y %H:%M"))
+            
+            return await self.send_html_email(to_email, subject, html_content)
+            
+        except Exception as e:
+            logger.error(f"Erro ao enviar email de teste: {e}")
+            return False 
