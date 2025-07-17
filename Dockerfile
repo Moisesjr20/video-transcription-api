@@ -38,8 +38,8 @@ RUN mkdir -p temp downloads transcriptions
 RUN chmod +x /app
 RUN chmod +x /app/check_env.py
 
-# Verify environment variables on startup
-RUN python /app/check_env.py || echo "⚠️  Environment variables check failed"
+# Create startup script
+RUN echo '#!/bin/bash\npython /app/check_env.py\nexec "$@"' > /app/start.sh && chmod +x /app/start.sh
 
 # Expose port
 EXPOSE 8000
@@ -48,5 +48,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=10s --start-period=30s --retries=5 \
     CMD curl -f http://localhost:8000/health || (echo "Health check failed" && exit 1)
 
-# Run the application with more verbose logging
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"] 
+# Run the application with environment check and more verbose logging
+CMD ["/app/start.sh", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"] 
