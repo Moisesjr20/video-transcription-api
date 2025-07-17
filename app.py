@@ -51,7 +51,7 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.3"
+    version="1.3.4"
 )
 
 # Diretórios de trabalho
@@ -616,7 +616,7 @@ async def health_check():
         health_data = {
                     "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.3",
+        "version": "1.3.4",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -641,7 +641,7 @@ async def health_check():
         return {
                     "status": "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.3",
+        "version": "1.3.4",
             "error": str(e)
         }
 
@@ -728,45 +728,64 @@ async def check_new_videos_now():
 async def get_google_auth_url():
     """Gera URL de autenticação do Google"""
     try:
-        from google_config import get_google_credentials, GOOGLE_SCOPES
-        
         # Debug: verificar configurações
         logger.info("🔍 Verificando configurações OAuth...")
         
-        creds = get_google_credentials()
-        logger.info(f"Client ID configurado: {'Sim' if creds['client_id'] else 'Não'}")
-        logger.info(f"Client Secret configurado: {'Sim' if creds['client_secret'] else 'Não'}")
-        logger.info(f"Redirect URI: {creds['redirect_uri']}")
+        # Verificar se as variáveis de ambiente estão disponíveis
+        client_id = os.environ.get("GOOGLE_CLIENT_ID")
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+        redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
+        
+        logger.info(f"Client ID from env: {'Sim' if client_id else 'Não'}")
+        logger.info(f"Client Secret from env: {'Sim' if client_secret else 'Não'}")
+        logger.info(f"Redirect URI from env: {redirect_uri}")
         
         # Verificar se as credenciais estão configuradas
-        if not creds['client_id'] or not creds['client_secret']:
+        if not client_id or not client_secret:
             raise Exception("Credenciais do Google não configuradas. Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no Easypanel.")
+        
+        # Importar módulos necessários
+        try:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            from google_config import GOOGLE_SCOPES
+        except ImportError as e:
+            logger.error(f"Erro ao importar módulos Google: {e}")
+            raise Exception(f"Erro ao importar módulos Google: {str(e)}")
         
         # Criar fluxo de autenticação
         flow = InstalledAppFlow.from_client_config(
             {
                 "installed": {
-                    "client_id": creds['client_id'],
+                    "client_id": client_id,
                     "project_id": "video-transcription-api",
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                    "client_secret": creds['client_secret'],
-                    "redirect_uris": [creds['redirect_uri']]
+                    "client_secret": client_secret,
+                    "redirect_uris": [redirect_uri]
                 }
             },
             GOOGLE_SCOPES
         )
         
         # Salvar o fluxo para usar no callback
-        with open('oauth_flow.pickle', 'wb') as f:
-            pickle.dump(flow, f)
+        try:
+            with open('oauth_flow.pickle', 'wb') as f:
+                pickle.dump(flow, f)
+        except Exception as e:
+            logger.error(f"Erro ao salvar fluxo OAuth: {e}")
+            raise Exception(f"Erro ao salvar fluxo OAuth: {str(e)}")
         
-        auth_url, _ = flow.authorization_url(
-            access_type='offline',
-            prompt='consent',
-            include_granted_scopes='true'
-        )
+        # Gerar URL de autenticação
+        try:
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                prompt='consent',
+                include_granted_scopes='true'
+            )
+        except Exception as e:
+            logger.error(f"Erro ao gerar URL de autorização: {e}")
+            raise Exception(f"Erro ao gerar URL de autorização: {str(e)}")
         
         logger.info("✅ URL de autenticação gerada com sucesso")
         
@@ -923,6 +942,48 @@ async def debug_google_config():
         logger.error(f"Erro ao debug configurações: {e}")
         raise HTTPException(status_code=500, detail=f"Erro no debug: {str(e)}")
 
+@app.get("/google/test-deps")
+async def test_google_dependencies():
+    """Testa se as dependências do Google estão funcionando"""
+    try:
+        # Testar imports
+        import_results = {}
+        
+        try:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            import_results["google_auth_oauthlib"] = "✅ OK"
+        except ImportError as e:
+            import_results["google_auth_oauthlib"] = f"❌ Erro: {str(e)}"
+        
+        try:
+            from google.oauth2.credentials import Credentials
+            import_results["google.oauth2.credentials"] = "✅ OK"
+        except ImportError as e:
+            import_results["google.oauth2.credentials"] = f"❌ Erro: {str(e)}"
+        
+        try:
+            from googleapiclient.discovery import build
+            import_results["googleapiclient.discovery"] = "✅ OK"
+        except ImportError as e:
+            import_results["googleapiclient.discovery"] = f"❌ Erro: {str(e)}"
+        
+        # Testar variáveis de ambiente
+        env_vars = {
+            "GOOGLE_CLIENT_ID": os.environ.get("GOOGLE_CLIENT_ID", "Não configurado"),
+            "GOOGLE_CLIENT_SECRET": os.environ.get("GOOGLE_CLIENT_SECRET", "Não configurado"),
+            "GOOGLE_REDIRECT_URI": os.environ.get("GOOGLE_REDIRECT_URI", "Não configurado")
+        }
+        
+        return {
+            "imports": import_results,
+            "environment_variables": env_vars,
+            "all_imports_ok": all("✅ OK" in result for result in import_results.values()),
+            "all_env_vars_ok": all("Não configurado" not in value for value in env_vars.values())
+        }
+    except Exception as e:
+        logger.error(f"Erro ao testar dependências: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro no teste: {str(e)}")
+
 @app.post("/google/send-test-email")
 async def send_test_email(request: GoogleAuthRequest):
     """Envia email de teste"""
@@ -948,7 +1009,7 @@ async def send_test_email(request: GoogleAuthRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.3")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.4")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")
