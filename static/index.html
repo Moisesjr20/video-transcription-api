@@ -306,6 +306,84 @@
             border: 1px solid #ffeaa7;
         }
 
+        .video-item {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-left: 4px solid #4285f4;
+            transition: all 0.3s ease;
+        }
+
+        .video-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .video-item.processed {
+            border-left-color: #4CAF50;
+            background: #f1f8e9;
+        }
+
+        .video-item.pending {
+            border-left-color: #ff9800;
+            background: #fff8e1;
+        }
+
+        .video-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .video-name {
+            font-weight: 600;
+            color: #333;
+            margin: 0;
+        }
+
+        .video-status {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .video-status.processed {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .video-status.pending {
+            background: #ff9800;
+            color: white;
+        }
+
+        .video-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-bottom: 10px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .video-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.8rem;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding: 10px;
@@ -317,6 +395,16 @@
             
             .dashboard {
                 grid-template-columns: 1fr;
+            }
+
+            .video-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+
+            .video-actions {
+                justify-content: center;
             }
         }
     </style>
@@ -372,6 +460,34 @@
                     </button>
                     <button class="btn btn-warning" onclick="checkNow()" id="check-btn">
                         <i class="fas fa-search"></i> Verificar Agora
+                    </button>
+                </div>
+            </div>
+
+            <!-- Vídeos Disponíveis -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon status-active">
+                        <i class="fas fa-video"></i>
+                    </div>
+                    <div>
+                        <div class="card-title">Vídeos na Pasta</div>
+                        <div id="videos-count">Carregando...</div>
+                    </div>
+                </div>
+
+                <div id="videos-container" style="margin: 20px 0;">
+                    <div class="text-center" style="color: #666;">
+                        <i class="fas fa-spinner fa-spin"></i> Carregando vídeos...
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-primary" onclick="loadVideos()">
+                        <i class="fas fa-sync"></i> Atualizar Lista
+                    </button>
+                    <button class="btn btn-success" onclick="transcribeAllPending()">
+                        <i class="fas fa-play"></i> Transcrever Todos
                     </button>
                 </div>
             </div>
@@ -715,10 +831,178 @@
                 // Carregar histórico
                 await loadTranscriptionHistory();
                 
+                // Carregar vídeos
+                await loadVideos();
+                
                 addLogEntry('Aplicação carregada com sucesso', 'success');
                 
             } catch (error) {
                 addLogEntry(`Erro na inicialização: ${error.message}`, 'error');
+            }
+        }
+
+        // Funções para gerenciar vídeos
+        async function loadVideos() {
+            try {
+                const response = await fetch('/videos/list');
+                if (response.ok) {
+                    const data = await response.json();
+                    displayVideos(data.videos);
+                    updateVideosCount(data);
+                } else {
+                    showAlert('Erro ao carregar vídeos', 'error');
+                }
+            } catch (error) {
+                showAlert(`Erro ao carregar vídeos: ${error.message}`, 'error');
+            }
+        }
+
+        function displayVideos(videos) {
+            const container = document.getElementById('videos-container');
+            
+            if (videos.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center" style="color: #666; padding: 20px;">
+                        <i class="fas fa-folder-open" style="font-size: 2rem; margin-bottom: 10px;"></i>
+                        <p>Nenhum vídeo encontrado na pasta</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = videos.map(video => `
+                <div class="video-item ${video.processed ? 'processed' : 'pending'}">
+                    <div class="video-header">
+                        <h4 class="video-name">${video.name}</h4>
+                        <span class="video-status ${video.processed ? 'processed' : 'pending'}">
+                            ${video.processed ? 'Processado' : 'Pendente'}
+                        </span>
+                    </div>
+                    
+                    <div class="video-info">
+                        <div><i class="fas fa-weight"></i> ${video.size_mb.toFixed(1)} MB</div>
+                        <div><i class="fas fa-calendar"></i> ${new Date(video.created_time).toLocaleDateString()}</div>
+                        <div><i class="fas fa-clock"></i> ${new Date(video.created_time).toLocaleTimeString()}</div>
+                    </div>
+                    
+                    <div class="video-actions">
+                        ${!video.processed ? `
+                            <button class="btn btn-primary btn-sm" onclick="transcribeVideo('${video.id}', '${video.name}')">
+                                <i class="fas fa-play"></i> Transcrever
+                            </button>
+                        ` : `
+                            <button class="btn btn-warning btn-sm" onclick="markAsUnprocessed('${video.id}')">
+                                <i class="fas fa-undo"></i> Marcar como Pendente
+                            </button>
+                        `}
+                        
+                        ${video.processed ? `
+                            <button class="btn btn-success btn-sm" onclick="markAsProcessed('${video.id}')" disabled>
+                                <i class="fas fa-check"></i> Processado
+                            </button>
+                        ` : `
+                            <button class="btn btn-success btn-sm" onclick="markAsProcessed('${video.id}')">
+                                <i class="fas fa-check"></i> Marcar como Processado
+                            </button>
+                        `}
+                        
+                        <a href="${video.web_view_link}" target="_blank" class="btn btn-info btn-sm">
+                            <i class="fas fa-external-link-alt"></i> Ver no Drive
+                        </a>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateVideosCount(data) {
+            const countElement = document.getElementById('videos-count');
+            countElement.textContent = `${data.total_count} vídeos (${data.pending_count} pendentes, ${data.processed_count} processados)`;
+        }
+
+        async function transcribeVideo(videoId, videoName) {
+            try {
+                showAlert(`Iniciando transcrição de: ${videoName}`, 'success');
+                
+                const response = await fetch(`/videos/${videoId}/transcribe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    showAlert(`Transcrição iniciada! Task ID: ${result.task_id}`, 'success');
+                    addLogEntry(`Transcrição iniciada: ${videoName}`, 'success');
+                    
+                    // Recarregar lista de vídeos
+                    setTimeout(() => loadVideos(), 2000);
+                } else {
+                    const error = await response.text();
+                    showAlert(`Erro ao transcrever: ${error}`, 'error');
+                }
+            } catch (error) {
+                showAlert(`Erro ao transcrever: ${error.message}`, 'error');
+            }
+        }
+
+        async function markAsProcessed(videoId) {
+            try {
+                const response = await fetch(`/videos/${videoId}/mark-processed`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    showAlert('Vídeo marcado como processado', 'success');
+                    loadVideos();
+                } else {
+                    showAlert('Erro ao marcar como processado', 'error');
+                }
+            } catch (error) {
+                showAlert(`Erro: ${error.message}`, 'error');
+            }
+        }
+
+        async function markAsUnprocessed(videoId) {
+            try {
+                const response = await fetch(`/videos/${videoId}/mark-unprocessed`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    showAlert('Marcação de processado removida', 'success');
+                    loadVideos();
+                } else {
+                    showAlert('Erro ao remover marcação', 'error');
+                }
+            } catch (error) {
+                showAlert(`Erro: ${error.message}`, 'error');
+            }
+        }
+
+        async function transcribeAllPending() {
+            try {
+                const response = await fetch('/videos/list');
+                if (response.ok) {
+                    const data = await response.json();
+                    const pendingVideos = data.videos.filter(v => !v.processed);
+                    
+                    if (pendingVideos.length === 0) {
+                        showAlert('Nenhum vídeo pendente para transcrição', 'warning');
+                        return;
+                    }
+                    
+                    showAlert(`Iniciando transcrição de ${pendingVideos.length} vídeos...`, 'success');
+                    
+                    for (const video of pendingVideos) {
+                        await transcribeVideo(video.id, video.name);
+                        await new Promise(resolve => setTimeout(resolve, 1000)); // Delay entre transcrições
+                    }
+                    
+                    showAlert('Todas as transcrições foram iniciadas!', 'success');
+                }
+            } catch (error) {
+                showAlert(`Erro ao transcrever todos: ${error.message}`, 'error');
             }
         }
 

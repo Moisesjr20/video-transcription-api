@@ -600,6 +600,138 @@ class MonitorStatus(BaseModel):
     processed_files_count: int
     next_check_in_seconds: Optional[int] = None
 
+class VideoInfo(BaseModel):
+    id: str
+    name: str
+    size_mb: float
+    created_time: str
+    web_view_link: str
+    processed: bool
+
+@app.get("/videos/list")
+async def list_videos_in_folder():
+    """Lista todos os vídeos na pasta monitorada"""
+    try:
+        drive_service = DriveService()
+        files = await drive_service.list_folder_files(drive_monitor.drive_config['folder_id'])
+        
+        videos = []
+        for file in files:
+            file_id = file['id']
+            file_name = file['name']
+            
+            # Verificar se é vídeo
+            if not drive_monitor.is_video_file(file_name):
+                continue
+            
+            # Verificar se já foi processado
+            processed = file_id in drive_monitor.processed_files
+            
+            # Calcular tamanho em MB
+            file_size_mb = int(file.get('size', 0)) / (1024 * 1024)
+            
+            videos.append(VideoInfo(
+                id=file_id,
+                name=file_name,
+                size_mb=file_size_mb,
+                created_time=file.get('createdTime', ''),
+                web_view_link=file.get('webViewLink', ''),
+                processed=processed
+            ))
+        
+        return {
+            "videos": videos,
+            "total_count": len(videos),
+            "processed_count": len([v for v in videos if v.processed]),
+            "pending_count": len([v for v in videos if not v.processed])
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao listar vídeos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/videos/{video_id}/transcribe")
+async def transcribe_specific_video(video_id: str):
+    """Transcreve um vídeo específico"""
+    try:
+        # Verificar se o vídeo existe
+        drive_service = DriveService()
+        files = await drive_service.list_folder_files(drive_monitor.drive_config['folder_id'])
+        
+        video_file = None
+        for file in files:
+            if file['id'] == video_id:
+                video_file = file
+                break
+        
+        if not video_file:
+            raise HTTPException(status_code=404, detail="Vídeo não encontrado")
+        
+        # Verificar se é vídeo
+        if not drive_monitor.is_video_file(video_file['name']):
+            raise HTTPException(status_code=400, detail="Arquivo não é um vídeo")
+        
+        # Verificar tamanho
+        file_size_mb = int(video_file.get('size', 0)) / (1024 * 1024)
+        if file_size_mb > drive_monitor.drive_config['max_file_size']:
+            raise HTTPException(status_code=400, detail=f"Vídeo muito grande ({file_size_mb:.1f}MB)")
+        
+        # Criar URL do Google Drive
+        drive_url = f"https://drive.google.com/uc?id={video_id}&export=download"
+        
+        # Iniciar transcrição
+        request = VideoTranscriptionRequest(
+            google_drive_url=drive_url,
+            filename=video_file['name'],
+            language="pt",
+            extract_subtitles=True,
+            max_segment_minutes=10
+        )
+        
+        task_id = str(uuid.uuid4())
+        background_tasks = BackgroundTasks()
+        background_tasks.add_task(process_video_transcription, task_id, request)
+        
+        return {
+            "task_id": task_id,
+            "video_name": video_file['name'],
+            "message": "Transcrição iniciada com sucesso",
+            "check_status_url": f"/status/{task_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao transcrever vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/videos/{video_id}/mark-processed")
+async def mark_video_as_processed(video_id: str):
+    """Marca um vídeo como processado"""
+    try:
+        drive_monitor.processed_files.add(video_id)
+        drive_monitor.save_processed_files()
+        
+        return {"message": "Vídeo marcado como processado"}
+        
+    except Exception as e:
+        logger.error(f"Erro ao marcar vídeo como processado: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/videos/{video_id}/mark-unprocessed")
+async def mark_video_as_unprocessed(video_id: str):
+    """Remove marcação de processado de um vídeo"""
+    try:
+        drive_monitor.processed_files.discard(video_id)
+        drive_monitor.save_processed_files()
+        
+        return {"message": "Marcação de processado removida"}
+        
+    except Exception as e:
+        logger.error(f"Erro ao remover marcação de processado: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Rotas de monitoramento
 @app.post("/monitor/start")
 async def start_automated_monitoring():
     """Inicia o monitoramento automático"""
