@@ -51,7 +51,7 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.4"
+    version="1.3.5"
 )
 
 # Diretórios de trabalho
@@ -575,6 +575,25 @@ async def root():
     """Endpoint raiz - Interface web ou informações da API"""
     return HTMLResponse(content=open("static/index.html").read(), media_type="text/html")
 
+@app.get("/auth-setup")
+async def auth_setup_page():
+    """Serve a página de configuração de autenticação OAuth"""
+    try:
+        with open("static/auth_setup.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        return HTMLResponse("""
+        <html>
+        <head><title>Configuração OAuth</title></head>
+        <body>
+            <h1>Configuração OAuth</h1>
+            <p>Página de configuração não encontrada.</p>
+            <p><a href="/">Voltar ao início</a></p>
+        </body>
+        </html>
+        """)
+
 @app.get("/api")
 async def api_info():
     """Endpoint com informações da API"""
@@ -616,7 +635,7 @@ async def health_check():
         health_data = {
                     "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.4",
+        "version": "1.3.5",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -641,7 +660,7 @@ async def health_check():
         return {
                     "status": "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.4",
+        "version": "1.3.5",
             "error": str(e)
         }
 
@@ -984,6 +1003,64 @@ async def test_google_dependencies():
         logger.error(f"Erro ao testar dependências: {e}")
         raise HTTPException(status_code=500, detail=f"Erro no teste: {str(e)}")
 
+@app.get("/google/setup-auth")
+async def setup_google_auth():
+    """Configura autenticação OAuth persistente"""
+    try:
+        import subprocess
+        import sys
+        
+        # Executar o script de setup
+        result = subprocess.run([
+            sys.executable, "auth_setup.py"
+        ], capture_output=True, text=True, cwd="/app")
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "✅ Autenticação OAuth configurada com sucesso!",
+                "output": result.stdout
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "❌ Erro ao configurar autenticação",
+                "output": result.stdout,
+                "error": result.stderr
+            }
+    except Exception as e:
+        logger.error(f"Erro ao executar setup de autenticação: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro no setup: {str(e)}")
+
+@app.post("/google/complete-auth")
+async def complete_google_auth(code: str):
+    """Completa a autenticação OAuth com o código recebido"""
+    try:
+        import subprocess
+        import sys
+        
+        # Executar o script com o código
+        result = subprocess.run([
+            sys.executable, "auth_setup.py", "--code", code
+        ], capture_output=True, text=True, cwd="/app")
+        
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "🎉 Autenticação OAuth concluída com sucesso!",
+                "output": result.stdout
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "❌ Erro ao completar autenticação",
+                "output": result.stdout,
+                "error": result.stderr
+            }
+    except Exception as e:
+        logger.error(f"Erro ao completar autenticação: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro na autenticação: {str(e)}")
+
 @app.post("/google/send-test-email")
 async def send_test_email(request: GoogleAuthRequest):
     """Envia email de teste"""
@@ -1009,7 +1086,7 @@ async def send_test_email(request: GoogleAuthRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.4")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.5")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")

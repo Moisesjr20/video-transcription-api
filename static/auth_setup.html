@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuração de Autenticação OAuth</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card {
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen flex items-center justify-center p-4">
+    <div class="card rounded-2xl p-8 max-w-md w-full">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-white mb-2">🔐 Configuração OAuth</h1>
+            <p class="text-gray-200">Configure a autenticação do Google uma vez e nunca mais precisará autenticar novamente</p>
+        </div>
+
+        <div id="step1" class="space-y-4">
+            <div class="bg-white/10 rounded-lg p-4">
+                <h3 class="text-lg font-semibold text-white mb-2">Passo 1: Verificar Configuração</h3>
+                <p class="text-gray-200 text-sm mb-4">Vamos verificar se tudo está configurado corretamente.</p>
+                <button onclick="checkConfig()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">
+                    🔍 Verificar Configuração
+                </button>
+            </div>
+        </div>
+
+        <div id="step2" class="space-y-4 hidden">
+            <div class="bg-white/10 rounded-lg p-4">
+                <h3 class="text-lg font-semibold text-white mb-2">Passo 2: Gerar URL de Autenticação</h3>
+                <p class="text-gray-200 text-sm mb-4">Clique para gerar a URL de autenticação do Google.</p>
+                <button onclick="generateAuthUrl()" class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">
+                    🔗 Gerar URL de Autenticação
+                </button>
+            </div>
+        </div>
+
+        <div id="step3" class="space-y-4 hidden">
+            <div class="bg-white/10 rounded-lg p-4">
+                <h3 class="text-lg font-semibold text-white mb-2">Passo 3: Autorizar Acesso</h3>
+                <p class="text-gray-200 text-sm mb-4">Acesse a URL gerada e autorize o acesso ao Google Drive e Gmail.</p>
+                <div id="authUrl" class="bg-gray-800 rounded p-3 mb-4 hidden">
+                    <p class="text-blue-400 text-sm break-all"></p>
+                </div>
+                <a id="authLink" href="#" target="_blank" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors inline-block text-center">
+                    🔐 Abrir URL de Autenticação
+                </a>
+            </div>
+        </div>
+
+        <div id="step4" class="space-y-4 hidden">
+            <div class="bg-white/10 rounded-lg p-4">
+                <h3 class="text-lg font-semibold text-white mb-2">Passo 4: Completar Autenticação</h3>
+                <p class="text-gray-200 text-sm mb-4">Cole o código de autorização recebido do Google.</p>
+                <input type="text" id="authCode" placeholder="Cole o código aqui..." class="w-full bg-gray-800 text-white rounded-lg p-3 mb-4 border border-gray-600">
+                <button onclick="completeAuth()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">
+                    ✅ Completar Autenticação
+                </button>
+            </div>
+        </div>
+
+        <div id="result" class="mt-6 hidden">
+            <div class="bg-white/10 rounded-lg p-4">
+                <h3 class="text-lg font-semibold text-white mb-2">Resultado</h3>
+                <div id="resultContent" class="text-gray-200 text-sm"></div>
+            </div>
+        </div>
+
+        <div class="mt-6 text-center">
+            <a href="/" class="text-gray-300 hover:text-white text-sm">← Voltar ao início</a>
+        </div>
+    </div>
+
+    <script>
+        async function checkConfig() {
+            try {
+                const response = await fetch('/google/debug-config');
+                const data = await response.json();
+                
+                if (data.client_id_configured && data.client_secret_configured) {
+                    showResult('✅ Configuração OK! Todas as variáveis estão configuradas.', 'success');
+                    document.getElementById('step2').classList.remove('hidden');
+                } else {
+                    showResult('❌ Configuração incompleta. Verifique as variáveis de ambiente.', 'error');
+                }
+            } catch (error) {
+                showResult('❌ Erro ao verificar configuração: ' + error.message, 'error');
+            }
+        }
+
+        async function generateAuthUrl() {
+            try {
+                const response = await fetch('/google/setup-auth');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    showResult('✅ Setup iniciado com sucesso!', 'success');
+                    document.getElementById('step3').classList.remove('hidden');
+                    
+                    // Extrair URL da saída (se disponível)
+                    const output = data.output || '';
+                    const urlMatch = output.match(/https:\/\/accounts\.google\.com\/[^\s]+/);
+                    if (urlMatch) {
+                        const authUrl = urlMatch[0];
+                        document.getElementById('authUrl').classList.remove('hidden');
+                        document.getElementById('authUrl').querySelector('p').textContent = authUrl;
+                        document.getElementById('authLink').href = authUrl;
+                    }
+                } else {
+                    showResult('❌ Erro no setup: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showResult('❌ Erro ao gerar URL: ' + error.message, 'error');
+            }
+        }
+
+        async function completeAuth() {
+            const code = document.getElementById('authCode').value.trim();
+            if (!code) {
+                showResult('❌ Por favor, cole o código de autorização.', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/google/complete-auth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ code: code })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    showResult('🎉 Autenticação concluída com sucesso! As credenciais foram salvas permanentemente.', 'success');
+                    document.getElementById('step4').classList.add('hidden');
+                } else {
+                    showResult('❌ Erro na autenticação: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showResult('❌ Erro ao completar autenticação: ' + error.message, 'error');
+            }
+        }
+
+        function showResult(message, type) {
+            const resultDiv = document.getElementById('result');
+            const contentDiv = document.getElementById('resultContent');
+            
+            contentDiv.innerHTML = message;
+            resultDiv.classList.remove('hidden');
+            
+            // Scroll para o resultado
+            resultDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html> 
