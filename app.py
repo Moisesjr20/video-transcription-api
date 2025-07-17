@@ -36,8 +36,8 @@ app = FastAPI(
 )
 
 # Servir arquivos estáticos
-import os
-if not os.path.exists("static"): os.makedirs("static")
+if not os.path.exists("static"): 
+    os.makedirs("static")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 TEMP_DIR = Path("temp")
@@ -168,6 +168,7 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             'file_info': {}
         }
         save_task_to_file(task_id, transcription_tasks[task_id])
+        
         video_path = None
         if request.google_drive_url:
             file_id = extract_google_drive_id(request.google_drive_url)
@@ -197,31 +198,40 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             save_task_to_file(task_id, transcription_tasks[task_id])
         else:
             raise ValueError("Nenhuma fonte de vídeo fornecida")
+        
         file_size_mb = get_file_size_mb(video_path)
         transcription_tasks[task_id]['file_info'] = {
             'size_mb': file_size_mb,
             'path': str(video_path)
         }
+        
         audio_path = TEMP_DIR / f"{task_id}_audio.wav"
         video = VideoFileClip(str(video_path))
         video.audio.write_audiofile(str(audio_path), verbose=False, logger=None)
         video.close()
+        
         transcription_tasks[task_id]['progress'] = 0.2
         transcription_tasks[task_id]['message'] = 'Áudio extraído, carregando modelo...'
         save_task_to_file(task_id, transcription_tasks[task_id])
+        
         model = load_whisper_model()
+        
         transcription_tasks[task_id]['progress'] = 0.3
         transcription_tasks[task_id]['message'] = 'Modelo carregado, iniciando transcrição...'
         save_task_to_file(task_id, transcription_tasks[task_id])
+        
         result = transcribe_audio_segment(audio_path, model, request.language)
         final_transcription = result['text']
         all_segments = result['segments']
+        
         transcription_tasks[task_id]['progress'] = 0.9
         transcription_tasks[task_id]['message'] = 'Transcrição concluída, salvando...'
         save_task_to_file(task_id, transcription_tasks[task_id])
+        
         transcription_file = TRANSCRIPTIONS_DIR / f"{task_id}_transcription.txt"
         with open(transcription_file, 'w', encoding='utf-8') as f:
             f.write(final_transcription)
+        
         transcription_tasks[task_id].update({
             'status': 'sucesso',
             'progress': 1.0,
@@ -231,12 +241,15 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             'completed_at': datetime.now().isoformat()
         })
         save_task_to_file(task_id, transcription_tasks[task_id])
+        
         try:
             audio_path.unlink()
             video_path.unlink()
         except:
             pass
+        
         logger.info(f"✅ Transcrição {task_id} concluída com sucesso!")
+        
     except Exception as e:
         logger.error(f"❌ Erro na transcrição {task_id}: {e}")
         transcription_tasks[task_id].update({
@@ -270,6 +283,15 @@ async def transcribe_video(request: VideoTranscriptionRequest, background_tasks:
 @app.get("/")
 def root():
     return FileResponse("static/index.html")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint para o Easypanel"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
 
 @app.get("/status/{task_id}", response_model=TranscriptionStatus)
 async def get_transcription_status(task_id: str):
