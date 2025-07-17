@@ -14,6 +14,8 @@ import moviepy.editor as mp
 from moviepy.video.io.VideoFileClip import VideoFileClip
 import whisper
 import gdown
+import tempfile
+import shutil
 from typing import Optional, List
 
 logging.basicConfig(
@@ -160,44 +162,69 @@ def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = 
                 'language': 'unknown'
             }
         
-        # Usar path absoluto como string e garantir que está correto
-        audio_file_str = str(audio_path_abs)
-        logger.info(f"🎵 Iniciando transcrição do arquivo: {audio_file_str}")
+        # Usar diretório temporário para evitar problemas de path
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir) / f"temp_video_{uuid.uuid4().hex[:8]}.mp4"
+            logger.info(f"📋 Copiando arquivo para diretório temporário: {temp_path}")
+            
+            # Copiar arquivo para diretório temporário
+            shutil.copy2(audio_path_abs, temp_path)
+            
+            # Verificar se a cópia foi bem-sucedida
+            if not temp_path.exists():
+                logger.error(f"❌ Falha ao copiar arquivo para diretório temporário")
+                return {
+                    'text': "[ERRO: Falha ao copiar arquivo para diretório temporário]",
+                    'segments': [],
+                    'language': 'unknown'
+                }
+            
+            logger.info(f"✅ Arquivo copiado com sucesso para: {temp_path}")
+            logger.info(f"📁 Tamanho do arquivo temporário: {temp_path.stat().st_size} bytes")
+            
+            # Tentar transcrição com o arquivo temporário
+            try:
+                result = model.transcribe(
+                    str(temp_path),
+                    language=language,
+                    task="transcribe"
+                )
+                
+                logger.info(f"✅ Transcrição concluída: {len(result.get('text', ''))} caracteres")
+                return {
+                    'text': result['text'],
+                    'segments': result.get('segments', []),
+                    'language': result.get('language', 'unknown')
+                }
+                
+            except Exception as transcribe_error:
+                logger.error(f"❌ Erro na transcrição com arquivo temporário: {transcribe_error}")
+                
+                # Tentar método alternativo: usar path relativo
+                try:
+                    logger.info("🔄 Tentando com path relativo...")
+                    relative_path = temp_path.relative_to(Path.cwd())
+                    result = model.transcribe(
+                        str(relative_path),
+                        language=language,
+                        task="transcribe"
+                    )
+                    
+                    logger.info(f"✅ Transcrição com path relativo concluída: {len(result.get('text', ''))} caracteres")
+                    return {
+                        'text': result['text'],
+                        'segments': result.get('segments', []),
+                        'language': result.get('language', 'unknown')
+                    }
+                    
+                except Exception as relative_error:
+                    logger.error(f"❌ Erro com path relativo: {relative_error}")
+                    return {
+                        'text': f"[ERRO: Falha na transcrição - {transcribe_error}]",
+                        'segments': [],
+                        'language': 'unknown'
+                    }
         
-        # Verificar se o arquivo ainda existe antes de transcrever
-        if not os.path.exists(audio_file_str):
-            logger.error(f"❌ Arquivo não encontrado no momento da transcrição: {audio_file_str}")
-            return {
-                'text': f"[ERRO: Arquivo não encontrado no momento da transcrição - {audio_file_str}]",
-                'segments': [],
-                'language': 'unknown'
-            }
-        
-        # Tentar abrir o arquivo para verificar se é acessível
-        try:
-            with open(audio_file_str, 'rb') as test_file:
-                test_file.read(1024)  # Ler apenas os primeiros bytes para testar
-            logger.info(f"✅ Arquivo acessível para leitura: {audio_file_str}")
-        except Exception as test_error:
-            logger.error(f"❌ Erro ao testar acesso ao arquivo: {test_error}")
-            return {
-                'text': f"[ERRO: Arquivo não acessível - {test_error}]",
-                'segments': [],
-                'language': 'unknown'
-            }
-        
-        result = model.transcribe(
-            audio_file_str,
-            language=language,
-            task="transcribe"
-        )
-        
-        logger.info(f"✅ Transcrição concluída: {len(result.get('text', ''))} caracteres")
-        return {
-            'text': result['text'],
-            'segments': result.get('segments', []),
-            'language': result.get('language', 'unknown')
-        }
     except Exception as e:
         logger.error(f"❌ Erro ao transcrever segmento {audio_path}: {e}")
         return {
@@ -272,30 +299,8 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         # Transcrição direta do vídeo (sem extrair áudio)
         logger.info(f"🎬 Iniciando transcrição direta do vídeo: {video_path}")
         
-        # Tentar transcrição com o path original
+        # Transcrição com diretório temporário
         result = transcribe_audio_segment(video_path, model, request.language)
-        
-        # Se falhar, tentar copiar para um path mais simples
-        if "[ERRO:" in result['text']:
-            logger.info("🔄 Tentando com path simplificado...")
-            try:
-                # Criar um path mais simples sem caracteres especiais
-                simple_path = DOWNLOADS_DIR / f"simple_{task_id}.mp4"
-                import shutil
-                shutil.copy2(video_path, simple_path)
-                logger.info(f"📋 Arquivo copiado para: {simple_path}")
-                
-                # Tentar transcrição com o path simplificado
-                result = transcribe_audio_segment(simple_path, model, request.language)
-                
-                # Limpar arquivo temporário
-                try:
-                    simple_path.unlink()
-                except:
-                    pass
-                    
-            except Exception as copy_error:
-                logger.error(f"❌ Erro ao copiar arquivo: {copy_error}")
         
         final_transcription = result['text']
         all_segments = result['segments']
