@@ -4,14 +4,10 @@ version: "1.0.0"
 
 services:
   - name: video-transcription-api
-    image:
-      dockerfile: Dockerfile
+    image: python:3.11-slim
     ports:
-      - published: 8000
-        target: 8000
+      - "8000:8000"
     environment:
-      - PYTHONUNBUFFERED=1
-      - ENVIRONMENT=production
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
@@ -19,12 +15,14 @@ services:
       - DESTINATION_EMAIL=${DESTINATION_EMAIL}
       - BUILD_DATE=${BUILD_DATE}
     volumes:
-      - name: downloads
-        mount: /app/downloads
-      - name: transcriptions
-        mount: /app/transcriptions
-      - name: temp
-        mount: /app/temp
+      - ./:/app
+    working_dir: /app
+    command: uvicorn app:app --host 0.0.0.0 --port 8000
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FORCE_REBUILD: "2024-01-17-20:30"
     deploy:
       replicas: 1
       resources:

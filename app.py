@@ -51,7 +51,7 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.2"
+    version="1.3.3"
 )
 
 # Diretórios de trabalho
@@ -616,7 +616,7 @@ async def health_check():
         health_data = {
                     "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.2",
+        "version": "1.3.3",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -641,7 +641,7 @@ async def health_check():
         return {
                     "status": "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.2",
+        "version": "1.3.3",
             "error": str(e)
         }
 
@@ -948,7 +948,7 @@ async def send_test_email(request: GoogleAuthRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.2")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.3")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")

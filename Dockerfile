@@ -36,6 +36,10 @@ RUN mkdir -p temp downloads transcriptions
 
 # Set permissions
 RUN chmod +x /app
+RUN chmod +x /app/check_env.py
+
+# Verify environment variables on startup
+RUN python /app/check_env.py || echo "⚠️  Environment variables check failed"
 
 # Expose port
 EXPOSE 8000
