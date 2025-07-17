@@ -102,20 +102,18 @@
                 const data = await response.json();
                 
                 if (data.status === 'success') {
-                    showResult('✅ Setup iniciado com sucesso!', 'success');
+                    showResult('✅ URL de autenticação gerada com sucesso!', 'success');
                     document.getElementById('step3').classList.remove('hidden');
                     
-                    // Extrair URL da saída (se disponível)
-                    const output = data.output || '';
-                    const urlMatch = output.match(/https:\/\/accounts\.google\.com\/[^\s]+/);
-                    if (urlMatch) {
-                        const authUrl = urlMatch[0];
+                    // Usar a URL diretamente da resposta
+                    if (data.auth_url) {
+                        const authUrl = data.auth_url;
                         document.getElementById('authUrl').classList.remove('hidden');
                         document.getElementById('authUrl').querySelector('p').textContent = authUrl;
                         document.getElementById('authLink').href = authUrl;
                     }
                 } else {
-                    showResult('❌ Erro no setup: ' + data.error, 'error');
+                    showResult('❌ Erro no setup: ' + (data.error || 'Erro desconhecido'), 'error');
                 }
             } catch (error) {
                 showResult('❌ Erro ao gerar URL: ' + error.message, 'error');

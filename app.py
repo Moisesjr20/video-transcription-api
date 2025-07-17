@@ -51,7 +51,7 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.6"
+    version="1.3.7"
 )
 
 # Diretórios de trabalho
@@ -635,7 +635,7 @@ async def health_check():
         health_data = {
                     "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.6",
+        "version": "1.3.7",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -660,7 +660,7 @@ async def health_check():
         return {
                     "status": "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.6",
+        "version": "1.3.7",
             "error": str(e)
         }
 
@@ -1007,59 +1007,119 @@ async def test_google_dependencies():
 async def setup_google_auth():
     """Configura autenticação OAuth persistente"""
     try:
-        import subprocess
-        import sys
+        # Importar módulos necessários
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from google_config import GOOGLE_SCOPES
         
-        # Executar o script de setup
-        result = subprocess.run([
-            sys.executable, "auth_setup.py"
-        ], capture_output=True, text=True, cwd="/app")
+        # Verificar variáveis de ambiente
+        client_id = os.environ.get("GOOGLE_CLIENT_ID")
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+        redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")
         
-        if result.returncode == 0:
-            return {
-                "status": "success",
-                "message": "✅ Autenticação OAuth configurada com sucesso!",
-                "output": result.stdout
-            }
-        else:
+        if not client_id or not client_secret:
             return {
                 "status": "error",
-                "message": "❌ Erro ao configurar autenticação",
-                "output": result.stdout,
-                "error": result.stderr
+                "message": "❌ Variáveis de ambiente não configuradas",
+                "error": "Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no Easypanel"
             }
+        
+        # Criar fluxo OAuth
+        flow = InstalledAppFlow.from_client_config(
+            {
+                "installed": {
+                    "client_id": client_id,
+                    "project_id": "video-transcription-api",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_secret": client_secret,
+                    "redirect_uris": [redirect_uri]
+                }
+            },
+            GOOGLE_SCOPES
+        )
+        
+        # Salvar o fluxo para usar no callback
+        with open('oauth_flow.pickle', 'wb') as f:
+            pickle.dump(flow, f)
+        
+        # Gerar URL de autenticação
+        auth_url, _ = flow.authorization_url(
+            access_type='offline',
+            prompt='consent',
+            include_granted_scopes='true'
+        )
+        
+        logger.info("✅ URL de autenticação gerada com sucesso")
+        
+        return {
+            "status": "success",
+            "message": "✅ URL de autenticação gerada com sucesso!",
+            "auth_url": auth_url,
+            "output": f"URL gerada: {auth_url}"
+        }
+        
     except Exception as e:
-        logger.error(f"Erro ao executar setup de autenticação: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro no setup: {str(e)}")
+        logger.error(f"Erro ao gerar URL de autenticação: {e}")
+        return {
+            "status": "error",
+            "message": "❌ Erro ao gerar URL de autenticação",
+            "error": str(e)
+        }
 
 @app.post("/google/complete-auth")
 async def complete_google_auth(code: str):
     """Completa a autenticação OAuth com o código recebido"""
     try:
-        import subprocess
-        import sys
-        
-        # Executar o script com o código
-        result = subprocess.run([
-            sys.executable, "auth_setup.py", "--code", code
-        ], capture_output=True, text=True, cwd="/app")
-        
-        if result.returncode == 0:
-            return {
-                "status": "success",
-                "message": "🎉 Autenticação OAuth concluída com sucesso!",
-                "output": result.stdout
-            }
-        else:
+        # Carregar o fluxo salvo
+        try:
+            with open('oauth_flow.pickle', 'rb') as f:
+                flow = pickle.load(f)
+        except FileNotFoundError:
             return {
                 "status": "error",
-                "message": "❌ Erro ao completar autenticação",
-                "output": result.stdout,
-                "error": result.stderr
+                "message": "❌ Sessão de autenticação expirada",
+                "error": "Por favor, inicie o processo de autenticação novamente"
             }
+        
+        # Trocar o código por tokens
+        flow.fetch_token(code=code)
+        
+        # Salvar as credenciais
+        credentials = flow.credentials
+        creds_data = {
+            'token': credentials.token,
+            'refresh_token': credentials.refresh_token,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': credentials.client_secret,
+            'scopes': credentials.scopes
+        }
+        
+        with open('token.json', 'w') as f:
+            json.dump(creds_data, f)
+        
+        # Limpar o arquivo de fluxo
+        try:
+            os.remove('oauth_flow.pickle')
+        except:
+            pass
+        
+        logger.info("✅ Autenticação OAuth concluída com sucesso!")
+        
+        return {
+            "status": "success",
+            "message": "🎉 Autenticação OAuth concluída com sucesso!",
+            "output": "As credenciais foram salvas em token.json"
+        }
+        
     except Exception as e:
         logger.error(f"Erro ao completar autenticação: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro na autenticação: {str(e)}")
+        return {
+            "status": "error",
+            "message": "❌ Erro ao completar autenticação",
+            "error": str(e)
+        }
 
 @app.post("/google/send-test-email")
 async def send_test_email(request: GoogleAuthRequest):
@@ -1086,7 +1146,7 @@ async def send_test_email(request: GoogleAuthRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.6")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.7")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")
