@@ -134,18 +134,72 @@ def download_from_google_drive(file_id: str, destination: Path) -> Path:
 def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = None) -> dict:
     try:
         logger.info(f"🎤 Transcrevendo segmento: {audio_path.name}")
+        
+        # Converter para path absoluto e normalizar
+        audio_path_abs = audio_path.resolve()
+        logger.info(f"📁 Path absoluto: {audio_path_abs}")
+        
+        # Verificar se o arquivo existe
+        if not audio_path_abs.exists():
+            logger.error(f"❌ Arquivo não encontrado: {audio_path_abs}")
+            return {
+                'text': f"[ERRO: Arquivo não encontrado - {audio_path_abs}]",
+                'segments': [],
+                'language': 'unknown'
+            }
+        
+        # Verificar tamanho do arquivo
+        file_size = audio_path_abs.stat().st_size
+        logger.info(f"📁 Tamanho do arquivo: {file_size} bytes")
+        
+        if file_size == 0:
+            logger.error(f"❌ Arquivo vazio: {audio_path_abs}")
+            return {
+                'text': "[ERRO: Arquivo de áudio vazio]",
+                'segments': [],
+                'language': 'unknown'
+            }
+        
+        # Usar path absoluto como string e garantir que está correto
+        audio_file_str = str(audio_path_abs)
+        logger.info(f"🎵 Iniciando transcrição do arquivo: {audio_file_str}")
+        
+        # Verificar se o arquivo ainda existe antes de transcrever
+        if not os.path.exists(audio_file_str):
+            logger.error(f"❌ Arquivo não encontrado no momento da transcrição: {audio_file_str}")
+            return {
+                'text': f"[ERRO: Arquivo não encontrado no momento da transcrição - {audio_file_str}]",
+                'segments': [],
+                'language': 'unknown'
+            }
+        
+        # Tentar abrir o arquivo para verificar se é acessível
+        try:
+            with open(audio_file_str, 'rb') as test_file:
+                test_file.read(1024)  # Ler apenas os primeiros bytes para testar
+            logger.info(f"✅ Arquivo acessível para leitura: {audio_file_str}")
+        except Exception as test_error:
+            logger.error(f"❌ Erro ao testar acesso ao arquivo: {test_error}")
+            return {
+                'text': f"[ERRO: Arquivo não acessível - {test_error}]",
+                'segments': [],
+                'language': 'unknown'
+            }
+        
         result = model.transcribe(
-            str(audio_path),
+            audio_file_str,
             language=language,
             task="transcribe"
         )
+        
+        logger.info(f"✅ Transcrição concluída: {len(result.get('text', ''))} caracteres")
         return {
             'text': result['text'],
             'segments': result.get('segments', []),
             'language': result.get('language', 'unknown')
         }
     except Exception as e:
-        logger.error(f"Erro ao transcrever segmento {audio_path}: {e}")
+        logger.error(f"❌ Erro ao transcrever segmento {audio_path}: {e}")
         return {
             'text': f"[ERRO: {str(e)}]",
             'segments': [],
@@ -205,28 +259,8 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             'path': str(video_path)
         }
         
-        audio_path = TEMP_DIR / f"{task_id}_audio.wav"
-        
-        # Verificar se o vídeo tem áudio
-        video = VideoFileClip(str(video_path))
-        if video.audio is None:
-            raise Exception("O vídeo não possui áudio para transcrever")
-        
-        # Extrair áudio com tratamento de erro
-        try:
-            video.audio.write_audiofile(str(audio_path), verbose=False, logger=None)
-            video.close()
-            
-            # Verificar se o arquivo de áudio foi criado
-            if not audio_path.exists():
-                raise Exception("Falha ao criar arquivo de áudio")
-                
-        except Exception as e:
-            video.close()
-            raise Exception(f"Erro ao extrair áudio: {str(e)}")
-        
         transcription_tasks[task_id]['progress'] = 0.2
-        transcription_tasks[task_id]['message'] = 'Áudio extraído, carregando modelo...'
+        transcription_tasks[task_id]['message'] = 'Carregando modelo Whisper...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
         model = load_whisper_model()
@@ -235,16 +269,36 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         transcription_tasks[task_id]['message'] = 'Modelo carregado, iniciando transcrição...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
-        result = transcribe_audio_segment(audio_path, model, request.language)
+        # Transcrição direta do vídeo (sem extrair áudio)
+        logger.info(f"🎬 Iniciando transcrição direta do vídeo: {video_path}")
+        
+        # Tentar transcrição com o path original
+        result = transcribe_audio_segment(video_path, model, request.language)
+        
+        # Se falhar, tentar copiar para um path mais simples
+        if "[ERRO:" in result['text']:
+            logger.info("🔄 Tentando com path simplificado...")
+            try:
+                # Criar um path mais simples sem caracteres especiais
+                simple_path = DOWNLOADS_DIR / f"simple_{task_id}.mp4"
+                import shutil
+                shutil.copy2(video_path, simple_path)
+                logger.info(f"📋 Arquivo copiado para: {simple_path}")
+                
+                # Tentar transcrição com o path simplificado
+                result = transcribe_audio_segment(simple_path, model, request.language)
+                
+                # Limpar arquivo temporário
+                try:
+                    simple_path.unlink()
+                except:
+                    pass
+                    
+            except Exception as copy_error:
+                logger.error(f"❌ Erro ao copiar arquivo: {copy_error}")
+        
         final_transcription = result['text']
         all_segments = result['segments']
-        
-        # Se a transcrição do áudio falhou, tentar transcrição direta do vídeo
-        if not final_transcription or final_transcription.strip() == "":
-            logger.warning("Transcrição do áudio falhou, tentando transcrição direta do vídeo...")
-            result = transcribe_audio_segment(video_path, model, request.language)
-            final_transcription = result['text']
-            all_segments = result['segments']
         
         transcription_tasks[task_id]['progress'] = 0.9
         transcription_tasks[task_id]['message'] = 'Transcrição concluída, salvando...'
@@ -265,7 +319,6 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         save_task_to_file(task_id, transcription_tasks[task_id])
         
         try:
-            audio_path.unlink()
             video_path.unlink()
         except:
             pass
