@@ -16,6 +16,8 @@ import whisper
 import gdown
 import tempfile
 import shutil
+import signal
+import threading
 from typing import Optional, List
 
 logging.basicConfig(
@@ -184,11 +186,40 @@ def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = 
             
             # Tentar transcrição com o arquivo temporário
             try:
-                result = model.transcribe(
-                    str(temp_path),
-                    language=language,
-                    task="transcribe"
-                )
+                # Adicionar timeout para evitar travamento
+                def transcribe_with_timeout():
+                    return model.transcribe(
+                        str(temp_path),
+                        language=language,
+                        task="transcribe"
+                    )
+                
+                # Executar com timeout de 10 minutos
+                result = None
+                def run_transcription():
+                    nonlocal result
+                    result = transcribe_with_timeout()
+                
+                thread = threading.Thread(target=run_transcription)
+                thread.daemon = True
+                thread.start()
+                thread.join(timeout=600)  # 10 minutos de timeout
+                
+                if thread.is_alive():
+                    logger.error("❌ Timeout na transcrição (10 minutos)")
+                    return {
+                        'text': "[ERRO: Timeout na transcrição - processo demorou mais de 10 minutos]",
+                        'segments': [],
+                        'language': 'unknown'
+                    }
+                
+                if result is None:
+                    logger.error("❌ Transcrição falhou")
+                    return {
+                        'text': "[ERRO: Falha na transcrição]",
+                        'segments': [],
+                        'language': 'unknown'
+                    }
                 
                 logger.info(f"✅ Transcrição concluída: {len(result.get('text', ''))} caracteres")
                 return {
@@ -300,7 +331,15 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         logger.info(f"🎬 Iniciando transcrição direta do vídeo: {video_path}")
         
         # Transcrição com diretório temporário
+        transcription_tasks[task_id]['progress'] = 0.4
+        transcription_tasks[task_id]['message'] = 'Iniciando transcrição...'
+        save_task_to_file(task_id, transcription_tasks[task_id])
+        
         result = transcribe_audio_segment(video_path, model, request.language)
+        
+        # Verificar se houve erro na transcrição
+        if "[ERRO:" in result['text']:
+            raise Exception(f"Falha na transcrição: {result['text']}")
         
         final_transcription = result['text']
         all_segments = result['segments']
@@ -343,10 +382,18 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_video(request: VideoTranscriptionRequest, background_tasks: BackgroundTasks):
     try:
+        # Verificar se há muitas tarefas ativas
+        active_tasks = len([t for t in transcription_tasks.values() if t.get('status') == 'em_progresso'])
+        if active_tasks >= 3:
+            raise HTTPException(status_code=503, detail="Servidor ocupado. Tente novamente em alguns minutos.")
+        
         task_id = str(uuid.uuid4())
         if not any([request.url, request.google_drive_url, request.base64_data]):
             raise HTTPException(status_code=400, detail="Forneça uma URL, Google Drive URL ou dados base64")
+        
+        # Iniciar tarefa em background
         background_tasks.add_task(process_video_transcription, task_id, request)
+        
         estimated_time = "5-10 minutos"
         return TranscriptionResponse(
             task_id=task_id,
@@ -356,13 +403,19 @@ async def transcribe_video(request: VideoTranscriptionRequest, background_tasks:
             estimated_time=estimated_time,
             check_status_url=f"/status/{task_id}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Erro ao iniciar transcrição: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
 @app.get("/")
 def root():
     return FileResponse("static/index.html")
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse("static/favicon.ico")
 
 @app.get("/health")
 async def health_check():
@@ -370,8 +423,14 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "active_tasks": len(transcription_tasks)
     }
+
+@app.get("/ping")
+async def ping():
+    """Endpoint simples para verificar se o servidor está respondendo"""
+    return {"pong": datetime.now().isoformat()}
 
 @app.get("/status/{task_id}", response_model=TranscriptionStatus)
 async def get_transcription_status(task_id: str):
