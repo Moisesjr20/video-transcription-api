@@ -54,31 +54,50 @@ class DriveService:
     def get_credentials(self) -> Optional[Credentials]:
         """Obtém credenciais do Google Drive"""
         try:
-            # Verificar se já temos token salvo
-            if os.path.exists(self.token_file):
+            # Primeiro, tentar carregar do token.json (novo formato)
+            if os.path.exists('token.json'):
+                with open('token.json', 'r') as f:
+                    creds_data = json.load(f)
+                
+                self.creds = Credentials(
+                    token=creds_data['token'],
+                    refresh_token=creds_data['refresh_token'],
+                    token_uri=creds_data['token_uri'],
+                    client_id=creds_data['client_id'],
+                    client_secret=creds_data['client_secret'],
+                    scopes=creds_data['scopes']
+                )
+                
+                # Verificar se precisa renovar
+                if self.creds.expired and self.creds.refresh_token:
+                    self.creds.refresh(Request())
+                    
+                    # Salvar credenciais atualizadas
+                    creds_data = {
+                        'token': self.creds.token,
+                        'refresh_token': self.creds.refresh_token,
+                        'token_uri': self.creds.token_uri,
+                        'client_id': self.creds.client_id,
+                        'client_secret': self.creds.client_secret,
+                        'scopes': self.creds.scopes
+                    }
+                    
+                    with open('token.json', 'w') as f:
+                        json.dump(creds_data, f)
+                
+                return self.creds
+            
+            # Fallback para o formato antigo (pickle)
+            elif os.path.exists(self.token_file):
                 with open(self.token_file, 'rb') as token:
                     self.creds = pickle.load(token)
-            
-            # Se não há credenciais válidas, fazer autenticação
-            if not self.creds or not self.creds.valid:
-                if self.creds and self.creds.expired and self.creds.refresh_token:
-                    self.creds.refresh(Request())
-                else:
-                    # Criar arquivo de credenciais temporário
-                    self.create_credentials_file()
-                    
-                    # Fazer fluxo de autenticação
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        self.credentials_file, 
-                        GOOGLE_SCOPES
-                    )
-                    self.creds = flow.run_local_server(port=0)
                 
-                # Salvar credenciais para próximo uso
-                with open(self.token_file, 'wb') as token:
-                    pickle.dump(self.creds, token)
+                if self.creds and self.creds.valid:
+                    return self.creds
             
-            return self.creds
+            # Se não há credenciais válidas, retornar None
+            logger.warning("❌ Nenhuma credencial válida encontrada. Execute a autenticação OAuth primeiro.")
+            return None
             
         except Exception as e:
             logger.error(f"Erro ao obter credenciais: {e}")

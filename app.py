@@ -26,6 +26,13 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 import whisper
 import gdown
 
+# Imports para OAuth
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+import pickle
+import json
+
 # Configuração de logging mais detalhada
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +51,7 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.0"
+    version="1.3.1"
 )
 
 # Diretórios de trabalho
@@ -609,7 +616,7 @@ async def health_check():
         health_data = {
                     "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.0",
+        "version": "1.3.1",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -634,7 +641,7 @@ async def health_check():
         return {
                     "status": "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.0",
+        "version": "1.3.1",
             "error": str(e)
         }
 
@@ -721,7 +728,6 @@ async def check_new_videos_now():
 async def get_google_auth_url():
     """Gera URL de autenticação do Google"""
     try:
-        from google_auth_oauthlib.flow import InstalledAppFlow
         from google_config import get_google_credentials, GOOGLE_SCOPES
         
         creds = get_google_credentials()
@@ -742,7 +748,15 @@ async def get_google_auth_url():
             GOOGLE_SCOPES
         )
         
-        auth_url, _ = flow.authorization_url(prompt='consent')
+        # Salvar o fluxo para usar no callback
+        with open('oauth_flow.pickle', 'wb') as f:
+            pickle.dump(flow, f)
+        
+        auth_url, _ = flow.authorization_url(
+            access_type='offline',
+            prompt='consent',
+            include_granted_scopes='true'
+        )
         
         return {
             "auth_url": auth_url,
@@ -751,6 +765,107 @@ async def get_google_auth_url():
     except Exception as e:
         logger.error(f"Erro ao gerar URL de autenticação: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao gerar URL: {str(e)}")
+
+@app.get("/auth/callback")
+async def oauth_callback(code: str = None, error: str = None):
+    """Endpoint de callback para OAuth2"""
+    try:
+        if error:
+            logger.error(f"Erro no OAuth: {error}")
+            return HTMLResponse(f"""
+            <html>
+            <head><title>Erro de Autenticação</title></head>
+            <body>
+                <h1>❌ Erro de Autenticação</h1>
+                <p>Erro: {error}</p>
+                <p><a href="/">Voltar ao início</a></p>
+            </body>
+            </html>
+            """)
+        
+        if not code:
+            return HTMLResponse("""
+            <html>
+            <head><title>Erro de Autenticação</title></head>
+            <body>
+                <h1>❌ Código de autorização não recebido</h1>
+                <p><a href="/">Voltar ao início</a></p>
+            </body>
+            </html>
+            """)
+        
+        # Carregar o fluxo salvo
+        try:
+            with open('oauth_flow.pickle', 'rb') as f:
+                flow = pickle.load(f)
+        except FileNotFoundError:
+            return HTMLResponse("""
+            <html>
+            <head><title>Erro de Autenticação</title></head>
+            <body>
+                <h1>❌ Sessão de autenticação expirada</h1>
+                <p>Por favor, inicie o processo de autenticação novamente.</p>
+                <p><a href="/">Voltar ao início</a></p>
+            </body>
+            </html>
+            """)
+        
+        # Trocar o código por tokens
+        flow.fetch_token(code=code)
+        
+        # Salvar as credenciais
+        credentials = flow.credentials
+        creds_data = {
+            'token': credentials.token,
+            'refresh_token': credentials.refresh_token,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': credentials.client_secret,
+            'scopes': credentials.scopes
+        }
+        
+        with open('token.json', 'w') as f:
+            json.dump(creds_data, f)
+        
+        # Limpar o arquivo de fluxo
+        try:
+            os.remove('oauth_flow.pickle')
+        except:
+            pass
+        
+        logger.info("✅ Autenticação OAuth concluída com sucesso!")
+        
+        return HTMLResponse(f"""
+        <html>
+        <head>
+            <title>Autenticação Concluída</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }}
+                .success {{ color: #28a745; }}
+                .info {{ color: #17a2b8; }}
+            </style>
+        </head>
+        <body>
+            <h1 class="success">✅ Autenticação Concluída!</h1>
+            <p class="info">As credenciais do Google foram configuradas com sucesso.</p>
+            <p>Você pode fechar esta janela e voltar à interface principal.</p>
+            <p><a href="/">Voltar ao início</a></p>
+        </body>
+        </html>
+        """)
+        
+    except Exception as e:
+        logger.error(f"Erro no callback OAuth: {e}")
+        return HTMLResponse(f"""
+        <html>
+        <head><title>Erro de Autenticação</title></head>
+        <body>
+            <h1>❌ Erro durante a autenticação</h1>
+            <p>Erro: {str(e)}</p>
+            <p><a href="/">Voltar ao início</a></p>
+        </body>
+        </html>
+        """)
 
 @app.get("/google/test-connection")
 async def test_google_connection():
@@ -797,7 +912,7 @@ async def send_test_email(request: GoogleAuthRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.0")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.1")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")
