@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 import uuid
@@ -13,6 +14,11 @@ import logging
 from datetime import datetime
 import re
 import json
+
+# Imports para monitoramento automático
+from drive_monitor import drive_monitor
+from drive_service import DriveService
+from gmail_service import GmailService
 
 # Imports para processamento de vídeo
 import moviepy.editor as mp
@@ -37,8 +43,8 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 
 app = FastAPI(
     title="Video Transcription API",
-    description="API para transcrição de vídeos com suporte a Google Drive, divisão automática e extração de legendas",
-    version="1.2.0"
+    description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
+    version="1.3.0"
 )
 
 # Diretórios de trabalho
@@ -50,6 +56,13 @@ TASKS_DIR = Path("tasks")
 # Criar diretórios se não existirem
 for directory in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]:
     directory.mkdir(exist_ok=True)
+
+# Criar diretório static se não existir
+STATIC_DIR = Path("static")
+STATIC_DIR.mkdir(exist_ok=True)
+
+# Montar arquivos estáticos
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Carregar modelo Whisper (será carregado na primeira execução)
 whisper_model = None
@@ -552,11 +565,16 @@ async def delete_task(task_id: str):
 
 @app.get("/")
 async def root():
-    """Endpoint raiz com informações da API"""
+    """Endpoint raiz - Interface web ou informações da API"""
+    return HTMLResponse(content=open("static/index.html").read(), media_type="text/html")
+
+@app.get("/api")
+async def api_info():
+    """Endpoint com informações da API"""
     return {
         "message": "Video Transcription API",
-        "version": "1.2.0",
-        "description": "API para transcrição de vídeos com processamento assíncrono e status em tempo real",
+        "version": "1.3.0",
+        "description": "API para transcrição de vídeos com processamento assíncrono, status em tempo real e monitoramento automático",
         "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
         "status_meanings": {
             "upload_concluido": "Arquivo recebido, transcrição será iniciada",
@@ -569,7 +587,11 @@ async def root():
             "GET /status/{task_id} - Verificar status da transcrição",
             "GET /download/{filename} - Download da transcrição",
             "GET /tasks - Listar todas as tarefas",
-            "DELETE /tasks/{task_id} - Remover tarefa"
+            "DELETE /tasks/{task_id} - Remover tarefa",
+            "POST /monitor/start - Iniciar monitoramento automático",
+            "POST /monitor/stop - Parar monitoramento automático",
+            "GET /monitor/status - Status do monitoramento",
+            "GET /google/test-connection - Testar conexões Google"
         ]
     }
 
@@ -585,9 +607,9 @@ async def health_check():
         disk_info = psutil.disk_usage('/')
         
         health_data = {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "version": "1.2.0",
+                    "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.3.0",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -610,17 +632,172 @@ async def health_check():
     except Exception as e:
         logger.error(f"Health check error: {e}")
         return {
-            "status": "unhealthy",
-            "timestamp": datetime.now().isoformat(),
-            "version": "1.2.0",
+                    "status": "unhealthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.3.0",
             "error": str(e)
         }
 
 # Carregar tarefas salvas na inicialização
 load_all_tasks()
 
+# ============================================================================
+# NOVAS ROTAS PARA MONITORAMENTO AUTOMÁTICO
+# ============================================================================
+
+class MonitorStatus(BaseModel):
+    active: bool
+    last_check: Optional[str] = None
+    processed_files_count: int
+    next_check_in_seconds: Optional[int] = None
+
+class GoogleAuthRequest(BaseModel):
+    email: str
+
+@app.post("/monitor/start")
+async def start_automated_monitoring():
+    """Inicia o monitoramento automático do Google Drive"""
+    try:
+        # Iniciar monitoramento em background
+        asyncio.create_task(drive_monitor.start_monitoring())
+        
+        return {
+            "status": "success",
+            "message": "🚀 Monitoramento automático iniciado com sucesso!",
+            "details": {
+                "folder_id": drive_monitor.drive_config['folder_id'],
+                "check_interval": drive_monitor.drive_config['monitor_interval'],
+                "destination_email": drive_monitor.email_config['destination_email']
+            }
+        }
+    except Exception as e:
+        logger.error(f"Erro ao iniciar monitoramento: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao iniciar monitoramento: {str(e)}")
+
+@app.post("/monitor/stop")
+async def stop_automated_monitoring():
+    """Para o monitoramento automático"""
+    try:
+        drive_monitor.stop_monitoring()
+        
+        return {
+            "status": "success",
+            "message": "🛑 Monitoramento automático parado com sucesso!"
+        }
+    except Exception as e:
+        logger.error(f"Erro ao parar monitoramento: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao parar monitoramento: {str(e)}")
+
+@app.get("/monitor/status", response_model=MonitorStatus)
+async def get_monitor_status():
+    """Obtém o status do monitoramento automático"""
+    try:
+        return MonitorStatus(
+            active=drive_monitor.monitoring_active,
+            last_check=None,  # Pode ser implementado para rastrear último check
+            processed_files_count=len(drive_monitor.processed_files),
+            next_check_in_seconds=drive_monitor.drive_config['monitor_interval'] if drive_monitor.monitoring_active else None
+        )
+    except Exception as e:
+        logger.error(f"Erro ao obter status do monitoramento: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao obter status: {str(e)}")
+
+@app.post("/monitor/check-now")
+async def check_new_videos_now():
+    """Força uma verificação imediata de novos vídeos"""
+    try:
+        new_videos = await drive_monitor.check_new_videos()
+        
+        return {
+            "status": "success",
+            "message": f"🔍 Verificação concluída - {len(new_videos)} novos vídeos encontrados",
+            "new_videos": new_videos
+        }
+    except Exception as e:
+        logger.error(f"Erro na verificação manual: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro na verificação: {str(e)}")
+
+@app.get("/google/auth-url")
+async def get_google_auth_url():
+    """Gera URL de autenticação do Google"""
+    try:
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from google_config import get_google_credentials, GOOGLE_SCOPES
+        
+        creds = get_google_credentials()
+        
+        # Criar fluxo de autenticação
+        flow = InstalledAppFlow.from_client_config(
+            {
+                "installed": {
+                    "client_id": creds['client_id'],
+                    "project_id": "video-transcription-api",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_secret": creds['client_secret'],
+                    "redirect_uris": [creds['redirect_uri']]
+                }
+            },
+            GOOGLE_SCOPES
+        )
+        
+        auth_url, _ = flow.authorization_url(prompt='consent')
+        
+        return {
+            "auth_url": auth_url,
+            "message": "Acesse esta URL para autorizar o acesso ao Google Drive e Gmail"
+        }
+    except Exception as e:
+        logger.error(f"Erro ao gerar URL de autenticação: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar URL: {str(e)}")
+
+@app.get("/google/test-connection")
+async def test_google_connection():
+    """Testa conexão com Google APIs"""
+    try:
+        drive_service = DriveService()
+        gmail_service = GmailService()
+        
+        drive_ok = await drive_service.test_connection()
+        gmail_ok = await gmail_service.test_connection()
+        
+        return {
+            "drive_connection": "✅ OK" if drive_ok else "❌ FALHA",
+            "gmail_connection": "✅ OK" if gmail_ok else "❌ FALHA",
+            "drive_user_email": drive_service.get_user_email() if drive_ok else None,
+            "gmail_user_email": gmail_service.get_user_email() if gmail_ok else None
+        }
+    except Exception as e:
+        logger.error(f"Erro ao testar conexões Google: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro nos testes: {str(e)}")
+
+@app.post("/google/send-test-email")
+async def send_test_email(request: GoogleAuthRequest):
+    """Envia email de teste"""
+    try:
+        gmail_service = GmailService()
+        
+        success = await gmail_service.send_simple_email(
+            to_email=request.email,
+            subject="🧪 Teste - API de Transcrição",
+            body="Este é um email de teste da API de Transcrição de Vídeos. Se você recebeu este email, a configuração do Gmail está funcionando corretamente!"
+        )
+        
+        if success:
+            return {
+                "status": "success",
+                "message": f"📧 Email de teste enviado para {request.email}"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Falha ao enviar email de teste")
+            
+    except Exception as e:
+        logger.error(f"Erro ao enviar email de teste: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
+
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.2.0")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.0")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")

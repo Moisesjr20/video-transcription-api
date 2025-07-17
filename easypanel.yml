@@ -12,6 +12,12 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - ENVIRONMENT=production
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID}
+      - DESTINATION_EMAIL=${DESTINATION_EMAIL}
+      - BUILD_DATE=${BUILD_DATE}
     volumes:
       - name: downloads
         mount: /app/downloads
