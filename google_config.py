@@ -9,11 +9,11 @@ import os
 from typing import Dict, Any
 
 # Configurações do Google OAuth2
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "1051222617815-jmdb2igpmhu4vhuhn92advr20qacj9vt.apps.googleusercontent.com")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "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")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "1051222617815-rm2gm4e24d7ig8mb1fq6kbjq1hs4ppds.apps.googleusercontent.com")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "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")
 
 # URL de redirecionamento autorizado (será configurada via variável de ambiente)
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/callback")
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://transcritor-transcritor.whhc5g.easypanel.host/auth/callback")
 
 # ID da pasta do Google Drive para monitorar
 GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "14BFqXqjV1MsQIkafQ8oWPPvKASnQLiQG")

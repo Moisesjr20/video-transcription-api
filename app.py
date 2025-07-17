@@ -800,7 +800,8 @@ async def get_google_auth_url():
             auth_url, _ = flow.authorization_url(
                 access_type='offline',
                 prompt='consent',
-                include_granted_scopes='true'
+                include_granted_scopes='true',
+                redirect_uri=redirect_uri
             )
         except Exception as e:
             logger.error(f"Erro ao gerar URL de autorização: {e}")
