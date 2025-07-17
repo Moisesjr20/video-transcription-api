@@ -51,7 +51,7 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.7"
+    version="1.3.8"
 )
 
 # Diretórios de trabalho
@@ -635,7 +635,7 @@ async def health_check():
         health_data = {
                     "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.7",
+        "version": "1.3.8",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -660,7 +660,7 @@ async def health_check():
         return {
                     "status": "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.7",
+        "version": "1.3.8",
             "error": str(e)
         }
 
@@ -1039,16 +1039,24 @@ async def setup_google_auth():
             GOOGLE_SCOPES
         )
         
-        # Salvar o fluxo para usar no callback
-        with open('oauth_flow.pickle', 'wb') as f:
-            pickle.dump(flow, f)
-        
         # Gerar URL de autenticação
-        auth_url, _ = flow.authorization_url(
+        auth_url, state = flow.authorization_url(
             access_type='offline',
             prompt='consent',
             include_granted_scopes='true'
         )
+        
+        # Salvar apenas os dados necessários (não o objeto flow)
+        flow_data = {
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'redirect_uri': redirect_uri,
+            'scopes': GOOGLE_SCOPES,
+            'state': state
+        }
+        
+        with open('oauth_flow_data.json', 'w') as f:
+            json.dump(flow_data, f)
         
         logger.info("✅ URL de autenticação gerada com sucesso")
         
@@ -1071,16 +1079,32 @@ async def setup_google_auth():
 async def complete_google_auth(code: str):
     """Completa a autenticação OAuth com o código recebido"""
     try:
-        # Carregar o fluxo salvo
+        # Carregar os dados do fluxo
         try:
-            with open('oauth_flow.pickle', 'rb') as f:
-                flow = pickle.load(f)
+            with open('oauth_flow_data.json', 'r') as f:
+                flow_data = json.load(f)
         except FileNotFoundError:
             return {
                 "status": "error",
                 "message": "❌ Sessão de autenticação expirada",
                 "error": "Por favor, inicie o processo de autenticação novamente"
             }
+        
+        # Recriar o fluxo OAuth
+        flow = InstalledAppFlow.from_client_config(
+            {
+                "installed": {
+                    "client_id": flow_data['client_id'],
+                    "project_id": "video-transcription-api",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_secret": flow_data['client_secret'],
+                    "redirect_uris": [flow_data['redirect_uri']]
+                }
+            },
+            flow_data['scopes']
+        )
         
         # Trocar o código por tokens
         flow.fetch_token(code=code)
@@ -1101,7 +1125,7 @@ async def complete_google_auth(code: str):
         
         # Limpar o arquivo de fluxo
         try:
-            os.remove('oauth_flow.pickle')
+            os.remove('oauth_flow_data.json')
         except:
             pass
         
@@ -1146,7 +1170,7 @@ async def send_test_email(request: GoogleAuthRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.7")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.8")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")
