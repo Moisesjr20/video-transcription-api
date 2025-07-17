@@ -206,9 +206,24 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         }
         
         audio_path = TEMP_DIR / f"{task_id}_audio.wav"
+        
+        # Verificar se o vídeo tem áudio
         video = VideoFileClip(str(video_path))
-        video.audio.write_audiofile(str(audio_path), verbose=False, logger=None)
-        video.close()
+        if video.audio is None:
+            raise Exception("O vídeo não possui áudio para transcrever")
+        
+        # Extrair áudio com tratamento de erro
+        try:
+            video.audio.write_audiofile(str(audio_path), verbose=False, logger=None)
+            video.close()
+            
+            # Verificar se o arquivo de áudio foi criado
+            if not audio_path.exists():
+                raise Exception("Falha ao criar arquivo de áudio")
+                
+        except Exception as e:
+            video.close()
+            raise Exception(f"Erro ao extrair áudio: {str(e)}")
         
         transcription_tasks[task_id]['progress'] = 0.2
         transcription_tasks[task_id]['message'] = 'Áudio extraído, carregando modelo...'
@@ -223,6 +238,13 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         result = transcribe_audio_segment(audio_path, model, request.language)
         final_transcription = result['text']
         all_segments = result['segments']
+        
+        # Se a transcrição do áudio falhou, tentar transcrição direta do vídeo
+        if not final_transcription or final_transcription.strip() == "":
+            logger.warning("Transcrição do áudio falhou, tentando transcrição direta do vídeo...")
+            result = transcribe_audio_segment(video_path, model, request.language)
+            final_transcription = result['text']
+            all_segments = result['segments']
         
         transcription_tasks[task_id]['progress'] = 0.9
         transcription_tasks[task_id]['message'] = 'Transcrição concluída, salvando...'
