@@ -51,7 +51,7 @@ logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 app = FastAPI(
     title="Video Transcription API",
     description="API para transcrição de vídeos com suporte a Google Drive, divisão automática, extração de legendas e monitoramento automático",
-    version="1.3.1"
+    version="1.3.2"
 )
 
 # Diretórios de trabalho
@@ -616,7 +616,7 @@ async def health_check():
         health_data = {
                     "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.1",
+        "version": "1.3.2",
             "build_date": os.environ.get('BUILD_DATE', 'Unknown'),
             "whisper_loaded": whisper_model is not None,
             "system_info": {
@@ -641,7 +641,7 @@ async def health_check():
         return {
                     "status": "unhealthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.3.1",
+        "version": "1.3.2",
             "error": str(e)
         }
 
@@ -730,7 +730,17 @@ async def get_google_auth_url():
     try:
         from google_config import get_google_credentials, GOOGLE_SCOPES
         
+        # Debug: verificar configurações
+        logger.info("🔍 Verificando configurações OAuth...")
+        
         creds = get_google_credentials()
+        logger.info(f"Client ID configurado: {'Sim' if creds['client_id'] else 'Não'}")
+        logger.info(f"Client Secret configurado: {'Sim' if creds['client_secret'] else 'Não'}")
+        logger.info(f"Redirect URI: {creds['redirect_uri']}")
+        
+        # Verificar se as credenciais estão configuradas
+        if not creds['client_id'] or not creds['client_secret']:
+            raise Exception("Credenciais do Google não configuradas. Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no Easypanel.")
         
         # Criar fluxo de autenticação
         flow = InstalledAppFlow.from_client_config(
@@ -757,6 +767,8 @@ async def get_google_auth_url():
             prompt='consent',
             include_granted_scopes='true'
         )
+        
+        logger.info("✅ URL de autenticação gerada com sucesso")
         
         return {
             "auth_url": auth_url,
@@ -887,6 +899,30 @@ async def test_google_connection():
         logger.error(f"Erro ao testar conexões Google: {e}")
         raise HTTPException(status_code=500, detail=f"Erro nos testes: {str(e)}")
 
+@app.get("/google/debug-config")
+async def debug_google_config():
+    """Debug: verifica configurações do Google"""
+    try:
+        from google_config import get_google_credentials
+        
+        creds = get_google_credentials()
+        
+        return {
+            "client_id_configured": bool(creds['client_id']),
+            "client_secret_configured": bool(creds['client_secret']),
+            "redirect_uri": creds['redirect_uri'],
+            "client_id_preview": creds['client_id'][:10] + "..." if creds['client_id'] else "Não configurado",
+            "client_secret_preview": creds['client_secret'][:10] + "..." if creds['client_secret'] else "Não configurado",
+            "environment_vars": {
+                "GOOGLE_CLIENT_ID": os.environ.get("GOOGLE_CLIENT_ID", "Não configurado"),
+                "GOOGLE_CLIENT_SECRET": os.environ.get("GOOGLE_CLIENT_SECRET", "Não configurado"),
+                "GOOGLE_REDIRECT_URI": os.environ.get("GOOGLE_REDIRECT_URI", "Não configurado")
+            }
+        }
+    except Exception as e:
+        logger.error(f"Erro ao debug configurações: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro no debug: {str(e)}")
+
 @app.post("/google/send-test-email")
 async def send_test_email(request: GoogleAuthRequest):
     """Envia email de teste"""
@@ -912,7 +948,7 @@ async def send_test_email(request: GoogleAuthRequest):
         raise HTTPException(status_code=500, detail=f"Erro ao enviar email: {str(e)}")
 
 # Log da versão na inicialização
-logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.1")
+logger.info("API de Transcrição de Vídeo iniciada. Versão: 1.3.2")
 logger.info(f"Diretórios criados: {[str(d) for d in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]]}")
 logger.info(f"Tarefas carregadas: {len(transcription_tasks)}")
 logger.info("Aplicação pronta para receber requisições!")
