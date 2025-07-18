@@ -88,9 +88,23 @@ transcription_tasks = {}
 
 def save_task_to_file(task_id: str, task_data: dict):
     try:
+        # Garantir que todos os dados sejam serializáveis
+        def make_serializable(obj):
+            if isinstance(obj, dict):
+                return {k: make_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [make_serializable(item) for item in obj]
+            elif hasattr(obj, '__dict__'):
+                # Para objetos customizados, tentar converter para dict
+                return str(obj)
+            else:
+                return obj
+        
+        serializable_data = make_serializable(task_data)
+        
         task_file = TASKS_DIR / f"{task_id}.json"
         with open(task_file, 'w', encoding='utf-8') as f:
-            json.dump(task_data, f, indent=2, ensure_ascii=False)
+            json.dump(serializable_data, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.error(f"Erro ao salvar tarefa {task_id}: {e}")
 
@@ -225,17 +239,29 @@ def transcribe_with_assemblyai(audio_path: Path, language: Optional[str] = None)
                 # Converter resultado da AssemblyAI para formato compatível
                 segments = []
                 sentences = result.get_sentences()
+                logger.info(f"📝 Processando {len(sentences)} sentenças da AssemblyAI")
+                
                 for i, sentence in enumerate(sentences):
+                    # Garantir que o texto seja uma string válida
+                    sentence_text = str(sentence) if sentence else ""
+                    logger.debug(f"📝 Sentença {i}: {sentence_text[:50]}...")
+                    
                     segments.append({
                         'start': i * 1000,  # Estimativa de tempo em milissegundos
                         'end': (i + 1) * 1000,  # Estimativa de tempo em milissegundos
-                        'text': sentence,
+                        'text': sentence_text,
                         'speaker': 'A'
                     })
                 
+                logger.info(f"✅ {len(segments)} segmentos processados")
+                
                 logger.info(f"✅ Transcrição AssemblyAI concluída: {len(result.text)} caracteres")
+                
+                # Garantir que o texto seja uma string válida
+                transcription_text = str(result.text) if result.text else ""
+                
                 return {
-                    'text': result.text,
+                    'text': transcription_text,
                     'segments': segments,
                     'language': result.language_code if hasattr(result, 'language_code') else 'pt'
                 }
@@ -341,15 +367,37 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         with open(transcription_file, 'w', encoding='utf-8') as f:
             f.write(final_transcription)
         
+        # Garantir que os segments sejam serializáveis
+        serializable_segments = []
+        logger.info(f"🔧 Convertendo {len(all_segments)} segmentos para formato serializável")
+        
+        for i, segment in enumerate(all_segments):
+            if isinstance(segment, dict):
+                serializable_segments.append(segment)
+            else:
+                # Se não for dict, converter para dict
+                logger.debug(f"🔧 Convertendo segmento {i} de tipo {type(segment)}")
+                serializable_segments.append({
+                    'start': getattr(segment, 'start', 0),
+                    'end': getattr(segment, 'end', 0),
+                    'text': str(getattr(segment, 'text', '')),
+                    'speaker': getattr(segment, 'speaker', 'A')
+                })
+        
+        logger.info(f"✅ {len(serializable_segments)} segmentos convertidos com sucesso")
+        
         transcription_tasks[task_id].update({
             'status': 'sucesso',
             'progress': 1.0,
             'message': 'Transcrição concluída com sucesso!',
             'transcription': final_transcription,
-            'segments': all_segments,
+            'segments': serializable_segments,
             'completed_at': datetime.now().isoformat()
         })
+        
+        logger.info(f"💾 Salvando tarefa {task_id} com {len(serializable_segments)} segmentos")
         save_task_to_file(task_id, transcription_tasks[task_id])
+        logger.info(f"✅ Tarefa {task_id} salva com sucesso")
         
         try:
             video_path.unlink()
@@ -424,7 +472,19 @@ async def ping():
 
 @app.get("/status/{task_id}", response_model=TranscriptionStatus)
 async def get_transcription_status(task_id: str):
-    task = transcription_tasks.get(task_id) or load_task_from_file(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Tarefa não encontrada")
-    return task
+    try:
+        task = transcription_tasks.get(task_id) or load_task_from_file(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Tarefa não encontrada")
+        
+        # Garantir que os dados sejam serializáveis antes de retornar
+        if 'segments' in task and task['segments']:
+            logger.debug(f"🔍 Verificando {len(task['segments'])} segmentos para serialização")
+            for i, segment in enumerate(task['segments']):
+                if not isinstance(segment, dict):
+                    logger.warning(f"⚠️ Segmento {i} não é dict: {type(segment)}")
+        
+        return task
+    except Exception as e:
+        logger.error(f"❌ Erro ao obter status da tarefa {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
