@@ -224,14 +224,14 @@ def transcribe_with_assemblyai(audio_path: Path, language: Optional[str] = None)
                 
                 # Converter resultado da AssemblyAI para formato compatível
                 segments = []
-                if result.segments:
-                    for segment in result.segments:
-                        segments.append({
-                            'start': segment.start,
-                            'end': segment.end,
-                            'text': segment.text,
-                            'speaker': getattr(segment, 'speaker', 'A')
-                        })
+                sentences = result.get_sentences()
+                for i, sentence in enumerate(sentences):
+                    segments.append({
+                        'start': i * 1000,  # Estimativa de tempo em milissegundos
+                        'end': (i + 1) * 1000,  # Estimativa de tempo em milissegundos
+                        'text': sentence,
+                        'speaker': 'A'
+                    })
                 
                 logger.info(f"✅ Transcrição AssemblyAI concluída: {len(result.text)} caracteres")
                 return {
