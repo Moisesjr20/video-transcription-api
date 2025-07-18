@@ -12,7 +12,7 @@ import re
 import json
 import moviepy.editor as mp
 from moviepy.video.io.VideoFileClip import VideoFileClip
-import whisper
+import assemblyai as aai
 import gdown
 import tempfile
 import shutil
@@ -27,15 +27,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 logger.info("=" * 50)
-logger.info("INICIANDO TRANSCRITOR API")
+logger.info("INICIANDO TRANSCRITOR API - ASSEMBLYAI")
 logger.info("=" * 50)
 logger.info(f"Python version: {os.sys.version}")
 logger.info(f"Working directory: {os.getcwd()}")
 logger.info(f"Build date: {os.environ.get('BUILD_DATE', 'Unknown')}")
 
+# Configurar AssemblyAI
+ASSEMBLYAI_API_KEY = "245ef4a0549d4808bb382cd40d9c054d"
+aai.settings.api_key = ASSEMBLYAI_API_KEY
+
 app = FastAPI(
-    title="Transcritor API",
-    description="API para transcrição de vídeos do Google Drive ou URL",
+    title="Transcritor API - AssemblyAI",
+    description="API para transcrição de vídeos do Google Drive ou URL usando AssemblyAI",
     version="1.0.0"
 )
 
@@ -50,16 +54,6 @@ TRANSCRIPTIONS_DIR = Path("transcriptions")
 TASKS_DIR = Path("tasks")
 for directory in [TEMP_DIR, DOWNLOADS_DIR, TRANSCRIPTIONS_DIR, TASKS_DIR]:
     directory.mkdir(exist_ok=True)
-
-whisper_model = None
-
-def load_whisper_model():
-    global whisper_model
-    if whisper_model is None:
-        logger.info("Carregando modelo Whisper...")
-        whisper_model = whisper.load_model("base")
-        logger.info("Modelo Whisper carregado com sucesso!")
-    return whisper_model
 
 class VideoTranscriptionRequest(BaseModel):
     url: Optional[str] = None
@@ -135,9 +129,9 @@ def download_from_google_drive(file_id: str, destination: Path) -> Path:
     logger.info(f"✅ Download via gdown concluído. Arquivo salvo em: {destination}")
     return destination
 
-def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = None) -> dict:
+def transcribe_with_assemblyai(audio_path: Path, language: Optional[str] = None) -> dict:
     try:
-        logger.info(f"🎤 Transcrevendo segmento: {audio_path.name}")
+        logger.info(f"🎤 Transcrevendo com AssemblyAI: {audio_path.name}")
         
         # Converter para path absoluto e normalizar
         audio_path_abs = audio_path.resolve()
@@ -164,6 +158,17 @@ def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = 
                 'language': 'unknown'
             }
         
+        # Configurar transcrição
+        config = aai.TranscriptionConfig(
+            language_code=language if language else "pt",  # Português como padrão
+            speaker_labels=True,
+            punctuate=True,
+            format_text=True
+        )
+        
+        # Criar transcrição
+        transcriber = aai.Transcriber()
+        
         # Usar diretório temporário para evitar problemas de path
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir) / f"temp_video_{uuid.uuid4().hex[:8]}.mp4"
@@ -188,11 +193,7 @@ def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = 
             try:
                 # Adicionar timeout para evitar travamento
                 def transcribe_with_timeout():
-                    return model.transcribe(
-                        str(temp_path),
-                        language=language,
-                        task="transcribe"
-                    )
+                    return transcriber.transcribe(str(temp_path), config=config)
                 
                 # Executar com timeout de 10 minutos
                 result = None
@@ -221,43 +222,34 @@ def transcribe_audio_segment(audio_path: Path, model, language: Optional[str] = 
                         'language': 'unknown'
                     }
                 
-                logger.info(f"✅ Transcrição concluída: {len(result.get('text', ''))} caracteres")
+                # Converter resultado da AssemblyAI para formato compatível
+                segments = []
+                if result.segments:
+                    for segment in result.segments:
+                        segments.append({
+                            'start': segment.start,
+                            'end': segment.end,
+                            'text': segment.text,
+                            'speaker': getattr(segment, 'speaker', 'A')
+                        })
+                
+                logger.info(f"✅ Transcrição AssemblyAI concluída: {len(result.text)} caracteres")
                 return {
-                    'text': result['text'],
-                    'segments': result.get('segments', []),
-                    'language': result.get('language', 'unknown')
+                    'text': result.text,
+                    'segments': segments,
+                    'language': result.language_code if hasattr(result, 'language_code') else 'pt'
                 }
                 
             except Exception as transcribe_error:
-                logger.error(f"❌ Erro na transcrição com arquivo temporário: {transcribe_error}")
-                
-                # Tentar método alternativo: usar path relativo
-                try:
-                    logger.info("🔄 Tentando com path relativo...")
-                    relative_path = temp_path.relative_to(Path.cwd())
-                    result = model.transcribe(
-                        str(relative_path),
-                        language=language,
-                        task="transcribe"
-                    )
-                    
-                    logger.info(f"✅ Transcrição com path relativo concluída: {len(result.get('text', ''))} caracteres")
-                    return {
-                        'text': result['text'],
-                        'segments': result.get('segments', []),
-                        'language': result.get('language', 'unknown')
-                    }
-                    
-                except Exception as relative_error:
-                    logger.error(f"❌ Erro com path relativo: {relative_error}")
-                    return {
-                        'text': f"[ERRO: Falha na transcrição - {transcribe_error}]",
-                        'segments': [],
-                        'language': 'unknown'
-                    }
+                logger.error(f"❌ Erro na transcrição com AssemblyAI: {transcribe_error}")
+                return {
+                    'text': f"[ERRO: Falha na transcrição - {transcribe_error}]",
+                    'segments': [],
+                    'language': 'unknown'
+                }
         
     except Exception as e:
-        logger.error(f"❌ Erro ao transcrever segmento {audio_path}: {e}")
+        logger.error(f"❌ Erro ao transcrever com AssemblyAI {audio_path}: {e}")
         return {
             'text': f"[ERRO: {str(e)}]",
             'segments': [],
@@ -287,7 +279,7 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
             video_path = download_from_google_drive(file_id, video_path)
             transcription_tasks[task_id]['progress'] = 0.1
-            transcription_tasks[task_id]['message'] = 'Download concluído, extraindo áudio...'
+            transcription_tasks[task_id]['message'] = 'Download concluído, iniciando transcrição...'
             save_task_to_file(task_id, transcription_tasks[task_id])
         elif request.url:
             video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
@@ -297,7 +289,7 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
             transcription_tasks[task_id]['progress'] = 0.1
-            transcription_tasks[task_id]['message'] = 'Download concluído, extraindo áudio...'
+            transcription_tasks[task_id]['message'] = 'Download concluído, iniciando transcrição...'
             save_task_to_file(task_id, transcription_tasks[task_id])
         elif request.base64_data:
             import base64
@@ -306,7 +298,7 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
             with open(video_path, 'wb') as f:
                 f.write(video_data)
             transcription_tasks[task_id]['progress'] = 0.1
-            transcription_tasks[task_id]['message'] = 'Arquivo salvo, extraindo áudio...'
+            transcription_tasks[task_id]['message'] = 'Arquivo salvo, iniciando transcrição...'
             save_task_to_file(task_id, transcription_tasks[task_id])
         else:
             raise ValueError("Nenhuma fonte de vídeo fornecida")
@@ -318,24 +310,21 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         }
         
         transcription_tasks[task_id]['progress'] = 0.2
-        transcription_tasks[task_id]['message'] = 'Carregando modelo Whisper...'
+        transcription_tasks[task_id]['message'] = 'Iniciando transcrição com AssemblyAI...'
         save_task_to_file(task_id, transcription_tasks[task_id])
-        
-        model = load_whisper_model()
         
         transcription_tasks[task_id]['progress'] = 0.3
-        transcription_tasks[task_id]['message'] = 'Modelo carregado, iniciando transcrição...'
+        transcription_tasks[task_id]['message'] = 'Transcrevendo com AssemblyAI...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
-        # Transcrição direta do vídeo (sem extrair áudio)
-        logger.info(f"🎬 Iniciando transcrição direta do vídeo: {video_path}")
+        # Transcrição direta do vídeo com AssemblyAI
+        logger.info(f"🎬 Iniciando transcrição com AssemblyAI: {video_path}")
         
-        # Transcrição com diretório temporário
         transcription_tasks[task_id]['progress'] = 0.4
-        transcription_tasks[task_id]['message'] = 'Iniciando transcrição...'
+        transcription_tasks[task_id]['message'] = 'Processando transcrição...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
-        result = transcribe_audio_segment(video_path, model, request.language)
+        result = transcribe_with_assemblyai(video_path, request.language)
         
         # Verificar se houve erro na transcrição
         if "[ERRO:" in result['text']:
@@ -394,7 +383,7 @@ async def transcribe_video(request: VideoTranscriptionRequest, background_tasks:
         # Iniciar tarefa em background
         background_tasks.add_task(process_video_transcription, task_id, request)
         
-        estimated_time = "5-10 minutos"
+        estimated_time = "2-5 minutos"
         return TranscriptionResponse(
             task_id=task_id,
             status="iniciado",
@@ -424,7 +413,8 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
-        "active_tasks": len(transcription_tasks)
+        "active_tasks": len(transcription_tasks),
+        "provider": "AssemblyAI"
     }
 
 @app.get("/ping")

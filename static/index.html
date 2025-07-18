@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Transcritor de Vídeos</title>
+    <title>Transcritor de Vídeos - AssemblyAI</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
         .container { max-width: 500px; margin: 40px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #0001; padding: 32px; }
         h1 { text-align: center; color: #333; }
+        .subtitle { text-align: center; color: #666; font-size: 0.9em; margin-bottom: 24px; }
         label { font-weight: bold; display: block; margin-bottom: 8px; }
         input[type="text"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 16px; }
         button { width: 100%; padding: 12px; background: #007bff; color: #fff; border: none; border-radius: 4px; font-size: 1.1em; cursor: pointer; }
@@ -22,11 +23,14 @@
         .progress { margin-top: 10px; }
         .progress-bar { width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; overflow: hidden; }
         .progress-fill { height: 100%; background: #007bff; transition: width 0.3s; }
+        .features { margin-top: 20px; font-size: 0.85em; color: #666; }
+        .features ul { margin: 8px 0; padding-left: 20px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Transcritor de Vídeos</h1>
+        <div class="subtitle">Powered by AssemblyAI</div>
         <label for="drive-link">Cole o link do Google Drive:</label>
         <input type="text" id="drive-link" placeholder="https://drive.google.com/file/d/..." autocomplete="off">
         <button id="transcribe-btn">Transcrever</button>
@@ -37,6 +41,15 @@
             </div>
         </div>
         <div id="result" class="transcription" style="display:none;"></div>
+        <div class="features">
+            <strong>Recursos da AssemblyAI:</strong>
+            <ul>
+                <li>Identificação automática de falantes</li>
+                <li>Pontuação e formatação automática</li>
+                <li>Transcrição mais rápida (2-5 min)</li>
+                <li>Melhor precisão em português</li>
+            </ul>
+        </div>
     </div>
     <script>
         const btn = document.getElementById('transcribe-btn');
