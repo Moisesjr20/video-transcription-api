@@ -398,7 +398,25 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         logger.info(f"💾 Salvando tarefa {task_id} com {len(serializable_segments)} segmentos")
         save_task_to_file(task_id, transcription_tasks[task_id])
         logger.info(f"✅ Tarefa {task_id} salva com sucesso")
-        
+
+        # Enviar transcrição para o webhook
+        try:
+            import httpx
+            webhook_url = "https://webhook.dev.kyrius.com.br/webhook/0d36b44a-c981-4c30-9ef3-68935f29a697"
+            payload = {
+                "task_id": task_id,
+                "transcription": final_transcription,
+                "filename": transcription_tasks[task_id].get('filename'),
+                "created_at": transcription_tasks[task_id].get('created_at'),
+                "completed_at": transcription_tasks[task_id].get('completed_at'),
+                "segments": serializable_segments
+            }
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(webhook_url, json=payload)
+                logger.info(f"✅ Webhook enviado: {resp.status_code} {resp.text}")
+        except Exception as e:
+            logger.error(f"❌ Erro ao enviar webhook: {e}")
+
         try:
             video_path.unlink()
         except:
