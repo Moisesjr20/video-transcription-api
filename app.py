@@ -350,7 +350,9 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
         transcription_tasks[task_id]['message'] = 'Processando transcrição...'
         save_task_to_file(task_id, transcription_tasks[task_id])
         
+        logger.info(f"🔜 Chamando AssemblyAI para transcrever: {video_path}")
         result = transcribe_with_assemblyai(video_path, request.language)
+        logger.info(f"🔙 AssemblyAI retornou resultado para: {video_path}")
         
         # Verificar se houve erro na transcrição
         if "[ERRO:" in result['text']:
@@ -411,9 +413,10 @@ async def process_video_transcription(task_id: str, request: VideoTranscriptionR
                 "completed_at": transcription_tasks[task_id].get('completed_at'),
                 "segments": serializable_segments
             }
+            logger.info(f"🔜 Enviando transcrição para webhook: {webhook_url}")
             with httpx.Client(timeout=30) as client:
                 resp = client.post(webhook_url, json=payload)
-                logger.info(f"✅ Webhook enviado: {resp.status_code} {resp.text}")
+                logger.info(f"🔙 Webhook enviado com status: {resp.status_code} {resp.text}")
         except Exception as e:
             logger.error(f"❌ Erro ao enviar webhook: {e}")
 
