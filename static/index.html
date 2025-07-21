@@ -161,7 +161,11 @@
                 
                 if (!resp.ok) {
                     const errorData = await resp.json().catch(() => ({}));
-                    throw new Error(errorData.detail || `Erro ${resp.status}: ${resp.statusText}`);
+                    showStatus('Erro: ' + (errorData.detail || `Erro ${resp.status}: ${resp.statusText}`), 'error');
+                    btn.disabled = false;
+                    progressDiv.style.display = 'none';
+                    clearInterval(pollInterval);
+                    return;
                 }
                 
                 const data = await resp.json();

@@ -475,16 +475,17 @@ async def get_transcription_status(task_id: str):
     try:
         task = transcription_tasks.get(task_id) or load_task_from_file(task_id)
         if not task:
+            logger.error(f"❌ Tarefa {task_id} não encontrada ao consultar status.")
             raise HTTPException(status_code=404, detail="Tarefa não encontrada")
-        
         # Garantir que os dados sejam serializáveis antes de retornar
         if 'segments' in task and task['segments']:
             logger.debug(f"🔍 Verificando {len(task['segments'])} segmentos para serialização")
             for i, segment in enumerate(task['segments']):
                 if not isinstance(segment, dict):
                     logger.warning(f"⚠️ Segmento {i} não é dict: {type(segment)}")
-        
         return task
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ Erro ao obter status da tarefa {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
+        logger.error(f"❌ Erro inesperado ao obter status da tarefa {task_id}: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno ao buscar status: {type(e).__name__}: {str(e)}")
