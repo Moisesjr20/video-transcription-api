@@ -103,17 +103,6 @@
             <div class="segments-info" id="segments-info"></div>
         </div>
         
-        <div id="history" class="transcription" style="display:none; margin-top: 20px;">
-            <div class="transcription-header">
-                <span>📚 Histórico de Transcrições</span>
-                <button class="copy-btn" onclick="refreshHistory()">🔄 Atualizar</button>
-            </div>
-            <div class="transcription-content" id="history-content">
-                <div style="text-align: center; color: #666; padding: 20px;">
-                    Carregando histórico...
-                </div>
-            </div>
-        </div>
         <div class="features">
             <strong>Recursos da AssemblyAI:</strong>
             <ul>
@@ -134,11 +123,6 @@
         let currentTaskId = null;
         let pollInterval = null;
         
-        // Carregar histórico ao iniciar a página
-        window.onload = function() {
-            loadHistory();
-        };
-
         btn.onclick = async function() {
             const url = input.value.trim();
             if (!url) {
@@ -305,109 +289,6 @@
                 setTimeout(() => {
                     copyBtn.textContent = originalText;
                 }, 2000);
-            }
-        }
-        
-        async function loadHistory() {
-            try {
-                const historyDiv = document.getElementById('history');
-                const historyContent = document.getElementById('history-content');
-                
-                // Simular carregamento de histórico (você pode implementar uma API real)
-                const recentTasks = [
-                    {
-                        taskId: '17103353-5ba0-4e17-8b2f-7f4c0b0c49f9',
-                        filename: 'test_video.mp4',
-                        status: 'sucesso',
-                        createdAt: '2025-07-18T10:02:05',
-                        charCount: 17116,
-                        segments: 383
-                    }
-                ];
-                
-                if (recentTasks.length > 0) {
-                    let historyHTML = '<div style="font-size: 12px; color: #666; margin-bottom: 16px;">Transcrições recentes:</div>';
-                    
-                    recentTasks.forEach(task => {
-                        const date = new Date(task.createdAt).toLocaleString('pt-BR');
-                        const statusIcon = task.status === 'sucesso' ? '✅' : '❌';
-                        
-                        historyHTML += `
-                            <div style="border: 1px solid #dee2e6; border-radius: 4px; padding: 12px; margin-bottom: 8px; background: white;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <strong>${task.filename}</strong>
-                                    <span>${statusIcon} ${task.status}</span>
-                                </div>
-                                <div style="font-size: 11px; color: #666;">
-                                    • Task ID: ${task.taskId}<br>
-                                    • Criado: ${date}<br>
-                                    • Caracteres: ${task.charCount.toLocaleString()}<br>
-                                    • Segmentos: ${task.segments}
-                                </div>
-                                <button onclick="viewTranscription('${task.taskId}')" style="margin-top: 8px; background: #007bff; color: white; border: none; padding: 4px 8px; border-radius: 3px; font-size: 11px; cursor: pointer;">
-                                    👁️ Ver Transcrição
-                                </button>
-                            </div>
-                        `;
-                    });
-                    
-                    historyContent.innerHTML = historyHTML;
-                    historyDiv.style.display = 'block';
-                } else {
-                    historyContent.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Nenhuma transcrição encontrada</div>';
-                    historyDiv.style.display = 'block';
-                }
-                
-            } catch (error) {
-                console.error('Erro ao carregar histórico:', error);
-                document.getElementById('history').style.display = 'none';
-            }
-        }
-        
-        function refreshHistory() {
-            loadHistory();
-        }
-        
-        async function viewTranscription(taskId) {
-            try {
-                const response = await fetch(`/status/${taskId}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    
-                    if (data.status === 'sucesso') {
-                        // Mostrar a transcrição na área principal
-                        const transcriptionContent = document.getElementById('transcription-content');
-                        const segmentsInfo = document.getElementById('segments-info');
-                        
-                        transcriptionContent.textContent = data.transcription || '[Sem texto]';
-                        
-                        const segments = data.segments || [];
-                        const charCount = data.transcription ? data.transcription.length : 0;
-                        const wordCount = data.transcription ? data.transcription.split(/\s+/).length : 0;
-                        
-                        segmentsInfo.innerHTML = `
-                            <strong>📊 Estatísticas:</strong><br>
-                            • Caracteres: ${charCount.toLocaleString()}<br>
-                            • Palavras: ${wordCount.toLocaleString()}<br>
-                            • Segmentos: ${segments.length}<br>
-                            • Task ID: ${taskId}<br>
-                            • Concluído em: ${new Date().toLocaleString('pt-BR')}
-                        `;
-                        
-                        document.getElementById('result').style.display = 'block';
-                        showStatus('✅ Transcrição carregada do histórico!', 'success');
-                        
-                        // Rolar para a transcrição
-                        document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
-                    } else {
-                        showStatus('❌ Transcrição não encontrada ou ainda em processamento', 'error');
-                    }
-                } else {
-                    showStatus('❌ Erro ao carregar transcrição', 'error');
-                }
-            } catch (error) {
-                console.error('Erro ao carregar transcrição:', error);
-                showStatus('❌ Erro ao carregar transcrição', 'error');
             }
         }
     </script>
