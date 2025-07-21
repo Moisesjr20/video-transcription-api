@@ -204,25 +204,26 @@
                         clearInterval(pollInterval);
                         showStatus('✅ Transcrição concluída com sucesso!', 'success');
                         
-                        // Mostrar transcrição com formatação
                         const transcriptionContent = document.getElementById('transcription-content');
                         const segmentsInfo = document.getElementById('segments-info');
-                        
-                        transcriptionContent.textContent = data.transcription || '[Sem texto]';
-                        
-                        // Informações dos segmentos
-                        const segments = data.segments || [];
-                        const charCount = data.transcription ? data.transcription.length : 0;
-                        const wordCount = data.transcription ? data.transcription.split(/\s+/).length : 0;
-                        
-                        segmentsInfo.innerHTML = `
-                            <strong>📊 Estatísticas:</strong><br>
-                            • Caracteres: ${charCount.toLocaleString()}<br>
-                            • Palavras: ${wordCount.toLocaleString()}<br>
-                            • Segmentos: ${segments.length}<br>
-                            • Task ID: ${taskId}<br>
-                            • Concluído em: ${new Date().toLocaleString('pt-BR')}
-                        `;
+
+                        if (transcriptionContent) {
+                            transcriptionContent.textContent = data.transcription || '[Sem texto]';
+                        }
+                        if (segmentsInfo) {
+                            const segments = data.segments || [];
+                            const charCount = data.transcription ? data.transcription.length : 0;
+                            const wordCount = data.transcription ? data.transcription.split(/\s+/).length : 0;
+
+                            segmentsInfo.innerHTML = `
+                                <strong>📊 Estatísticas:</strong><br>
+                                • Caracteres: ${charCount.toLocaleString()}<br>
+                                • Palavras: ${wordCount.toLocaleString()}<br>
+                                • Segmentos: ${segments.length}<br>
+                                • Task ID: ${taskId}<br>
+                                • Concluído em: ${new Date().toLocaleString('pt-BR')}
+                            `;
+                        }
                         
                         resultDiv.style.display = 'block';
                         btn.disabled = false;
