@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Form
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -85,6 +85,8 @@ class TranscriptionStatus(BaseModel):
     file_info: Optional[dict] = None
 
 transcription_tasks = {}
+active_tasks = set()
+MAX_CONCURRENT_TASKS = 3
 
 def save_task_to_file(task_id: str, task_data: dict):
     try:
@@ -133,6 +135,10 @@ def extract_google_drive_id(url: str) -> str:
             return match.group(1)
     raise ValueError("URL do Google Drive inválida")
 
+def extract_gdrive_id(url: str) -> str:
+    """Alias para extract_google_drive_id para compatibilidade"""
+    return extract_google_drive_id(url)
+
 def download_from_google_drive(file_id: str, destination: Path) -> Path:
     url = f'https://drive.google.com/uc?id={file_id}'
     logger.info(f"📥 Iniciando download do Google Drive com gdown: {url}")
@@ -143,29 +149,29 @@ def download_from_google_drive(file_id: str, destination: Path) -> Path:
     logger.info(f"✅ Download via gdown concluído. Arquivo salvo em: {destination}")
     return destination
 
-def transcribe_with_assemblyai(audio_path: Path, language: Optional[str] = None) -> dict:
+def transcribe_with_assemblyai(file_path: str) -> dict:
     try:
-        logger.info(f"🎤 Transcrevendo com AssemblyAI: {audio_path.name}")
+        logger.info(f"🎤 Transcrevendo com AssemblyAI: {file_path}")
         
         # Converter para path absoluto e normalizar
-        audio_path_abs = audio_path.resolve()
-        logger.info(f"📁 Path absoluto: {audio_path_abs}")
+        file_path_abs = Path(file_path).resolve()
+        logger.info(f"📁 Path absoluto: {file_path_abs}")
         
         # Verificar se o arquivo existe
-        if not audio_path_abs.exists():
-            logger.error(f"❌ Arquivo não encontrado: {audio_path_abs}")
+        if not file_path_abs.exists():
+            logger.error(f"❌ Arquivo não encontrado: {file_path_abs}")
             return {
-                'text': f"[ERRO: Arquivo não encontrado - {audio_path_abs}]",
+                'text': f"[ERRO: Arquivo não encontrado - {file_path_abs}]",
                 'segments': [],
                 'language': 'unknown'
             }
         
         # Verificar tamanho do arquivo
-        file_size = audio_path_abs.stat().st_size
+        file_size = file_path_abs.stat().st_size
         logger.info(f"📁 Tamanho do arquivo: {file_size} bytes")
         
         if file_size == 0:
-            logger.error(f"❌ Arquivo vazio: {audio_path_abs}")
+            logger.error(f"❌ Arquivo vazio: {file_path_abs}")
             return {
                 'text': "[ERRO: Arquivo de áudio vazio]",
                 'segments': [],
@@ -174,7 +180,7 @@ def transcribe_with_assemblyai(audio_path: Path, language: Optional[str] = None)
         
         # Configurar transcrição
         config = aai.TranscriptionConfig(
-            language_code=language if language else "pt",  # Português como padrão
+            language_code="pt",  # Português como padrão
             speaker_labels=True,
             punctuate=True,
             format_text=True
@@ -189,7 +195,7 @@ def transcribe_with_assemblyai(audio_path: Path, language: Optional[str] = None)
             logger.info(f"📋 Copiando arquivo para diretório temporário: {temp_path}")
             
             # Copiar arquivo para diretório temporário
-            shutil.copy2(audio_path_abs, temp_path)
+            shutil.copy2(file_path_abs, temp_path)
             
             # Verificar se a cópia foi bem-sucedida
             if not temp_path.exists():
@@ -282,189 +288,122 @@ def transcribe_with_assemblyai(audio_path: Path, language: Optional[str] = None)
             'language': 'unknown'
         }
 
-async def process_video_transcription(task_id: str, request: VideoTranscriptionRequest):
+def process_video_transcription(task_id: str, url: str):
+    """Processa a transcrição do vídeo em background"""
     try:
-        logger.info(f"🎬 Iniciando processamento da tarefa {task_id}")
-        transcription_tasks[task_id] = {
-            'task_id': task_id,
-            'status': 'em_progresso',
-            'progress': 0.0,
-            'message': 'Iniciando download...',
-            'transcription': None,
-            'segments': [],
-            'filename': request.filename or 'video',
-            'created_at': datetime.now().isoformat(),
-            'completed_at': None,
-            'file_info': {}
-        }
-        save_task_to_file(task_id, transcription_tasks[task_id])
+        logging.info(f"🎬 Iniciando processamento da tarefa {task_id}")
         
-        video_path = None
-        if request.google_drive_url:
-            file_id = extract_google_drive_id(request.google_drive_url)
-            video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
-            video_path = download_from_google_drive(file_id, video_path)
-            transcription_tasks[task_id]['progress'] = 0.1
-            transcription_tasks[task_id]['message'] = 'Download concluído, iniciando transcrição...'
-            save_task_to_file(task_id, transcription_tasks[task_id])
-        elif request.url:
-            video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
-            response = requests.get(request.url, stream=True)
-            response.raise_for_status()
-            with open(video_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            transcription_tasks[task_id]['progress'] = 0.1
-            transcription_tasks[task_id]['message'] = 'Download concluído, iniciando transcrição...'
-            save_task_to_file(task_id, transcription_tasks[task_id])
-        elif request.base64_data:
-            import base64
-            video_path = DOWNLOADS_DIR / f"{task_id}_{request.filename or 'video.mp4'}"
-            video_data = base64.b64decode(request.base64_data)
-            with open(video_path, 'wb') as f:
-                f.write(video_data)
-            transcription_tasks[task_id]['progress'] = 0.1
-            transcription_tasks[task_id]['message'] = 'Arquivo salvo, iniciando transcrição...'
-            save_task_to_file(task_id, transcription_tasks[task_id])
-        else:
-            raise ValueError("Nenhuma fonte de vídeo fornecida")
-        
-        file_size_mb = get_file_size_mb(video_path)
-        transcription_tasks[task_id]['file_info'] = {
-            'size_mb': file_size_mb,
-            'path': str(video_path)
-        }
-        
-        transcription_tasks[task_id]['progress'] = 0.2
-        transcription_tasks[task_id]['message'] = 'Iniciando transcrição com AssemblyAI...'
-        save_task_to_file(task_id, transcription_tasks[task_id])
-        
-        transcription_tasks[task_id]['progress'] = 0.3
-        transcription_tasks[task_id]['message'] = 'Transcrevendo com AssemblyAI...'
-        save_task_to_file(task_id, transcription_tasks[task_id])
-        
-        # Transcrição direta do vídeo com AssemblyAI
-        logger.info(f"🎬 Iniciando transcrição com AssemblyAI: {video_path}")
-        
-        transcription_tasks[task_id]['progress'] = 0.4
-        transcription_tasks[task_id]['message'] = 'Processando transcrição...'
-        save_task_to_file(task_id, transcription_tasks[task_id])
-        
-        logger.info(f"🔜 Chamando AssemblyAI para transcrever: {video_path}")
-        result = transcribe_with_assemblyai(video_path, request.language)
-        logger.info(f"🔙 AssemblyAI retornou resultado para: {video_path}")
-        
-        # Verificar se houve erro na transcrição
-        if "[ERRO:" in result['text']:
-            raise Exception(f"Falha na transcrição: {result['text']}")
-        
-        final_transcription = result['text']
-        all_segments = result['segments']
-        
-        transcription_tasks[task_id]['progress'] = 0.9
-        transcription_tasks[task_id]['message'] = 'Transcrição concluída, salvando...'
-        save_task_to_file(task_id, transcription_tasks[task_id])
-        
-        transcription_file = TRANSCRIPTIONS_DIR / f"{task_id}_transcription.txt"
-        with open(transcription_file, 'w', encoding='utf-8') as f:
-            f.write(final_transcription)
-        
-        # Garantir que os segments sejam serializáveis
-        serializable_segments = []
-        logger.info(f"🔧 Convertendo {len(all_segments)} segmentos para formato serializável")
-        
-        for i, segment in enumerate(all_segments):
-            if isinstance(segment, dict):
-                serializable_segments.append(segment)
-            else:
-                # Se não for dict, converter para dict
-                logger.debug(f"🔧 Convertendo segmento {i} de tipo {type(segment)}")
-                serializable_segments.append({
-                    'start': getattr(segment, 'start', 0),
-                    'end': getattr(segment, 'end', 0),
-                    'text': str(getattr(segment, 'text', '')),
-                    'speaker': getattr(segment, 'speaker', 'A')
+        # Criar diretório temporário para o arquivo
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_file_path = os.path.join(temp_dir, f"temp_video_{task_id[:8]}.mp4")
+            
+            # Download do Google Drive
+            logging.info(f"📥 Iniciando download do Google Drive com gdown: {url}")
+            gdrive_id = extract_gdrive_id(url)
+            gdrive_url = f"https://drive.google.com/uc?id={gdrive_id}"
+            
+            try:
+                gdown.download(gdrive_url, temp_file_path, quiet=False)
+                logging.info(f"✅ Download via gdown concluído. Arquivo salvo em: {temp_file_path}")
+            except Exception as e:
+                logging.error(f"❌ Erro no download: {str(e)}")
+                save_task_to_file(task_id, {"status": "error", "error": f"Erro no download: {str(e)}"})
+                return
+            
+            # Verificar se o arquivo foi baixado
+            if not os.path.exists(temp_file_path):
+                error_msg = "Arquivo não foi baixado corretamente"
+                logging.error(f"❌ {error_msg}")
+                save_task_to_file(task_id, {"status": "error", "error": error_msg})
+                return
+            
+            # Log de checkpoint antes da transcrição
+            logging.info(f"🔜 CHECKPOINT: Arquivo baixado, iniciando transcrição AssemblyAI")
+            logging.info(f"📁 Path absoluto: {os.path.abspath(temp_file_path)}")
+            logging.info(f"📁 Tamanho do arquivo: {os.path.getsize(temp_file_path)} bytes")
+            
+            # Transcrição com AssemblyAI
+            try:
+                logging.info(f"🎬 Iniciando transcrição com AssemblyAI: {temp_file_path}")
+                result = transcribe_with_assemblyai(temp_file_path)
+                
+                # Log de checkpoint após transcrição
+                logging.info(f"✅ CHECKPOINT: Transcrição AssemblyAI concluída")
+                logging.info(f"📊 Resultado: {len(result.get('segments', []))} segmentos")
+                
+                # Salvar resultado
+                save_task_to_file(task_id, {
+                    "status": "completed",
+                    "result": result,
+                    "segments": result.get('segments', []),
+                    "text": result.get('text', ''),
+                    "duration": result.get('audio_duration', 0)
                 })
-        
-        logger.info(f"✅ {len(serializable_segments)} segmentos convertidos com sucesso")
-        
-        transcription_tasks[task_id].update({
-            'status': 'sucesso',
-            'progress': 1.0,
-            'message': 'Transcrição concluída com sucesso!',
-            'transcription': final_transcription,
-            'segments': serializable_segments,
-            'completed_at': datetime.now().isoformat()
-        })
-        
-        logger.info(f"💾 Salvando tarefa {task_id} com {len(serializable_segments)} segmentos")
-        save_task_to_file(task_id, transcription_tasks[task_id])
-        logger.info(f"✅ Tarefa {task_id} salva com sucesso")
-
-        # Enviar transcrição para o webhook
-        try:
-            import httpx
-            webhook_url = "https://webhook.dev.kyrius.com.br/webhook/0d36b44a-c981-4c30-9ef3-68935f29a697"
-            payload = {
-                "task_id": task_id,
-                "transcription": final_transcription,
-                "filename": transcription_tasks[task_id].get('filename'),
-                "created_at": transcription_tasks[task_id].get('created_at'),
-                "completed_at": transcription_tasks[task_id].get('completed_at'),
-                "segments": serializable_segments
-            }
-            logger.info(f"🔜 Enviando transcrição para webhook: {webhook_url}")
-            with httpx.Client(timeout=30) as client:
-                resp = client.post(webhook_url, json=payload)
-                logger.info(f"🔙 Webhook enviado com status: {resp.status_code} {resp.text}")
-        except Exception as e:
-            logger.error(f"❌ Erro ao enviar webhook: {e}")
-
-        try:
-            video_path.unlink()
-        except:
-            pass
-        
-        logger.info(f"✅ Transcrição {task_id} concluída com sucesso!")
-        
+                
+                # Enviar webhook se configurado
+                if WEBHOOK_URL:
+                    try:
+                        logging.info(f"🔗 Enviando resultado para webhook: {WEBHOOK_URL}")
+                        webhook_data = {
+                            "task_id": task_id,
+                            "status": "completed",
+                            "text": result.get('text', ''),
+                            "segments": result.get('segments', []),
+                            "duration": result.get('audio_duration', 0)
+                        }
+                        
+                        response = httpx.post(WEBHOOK_URL, json=webhook_data, timeout=30.0)
+                        logging.info(f"✅ Webhook enviado com sucesso. Status: {response.status_code}")
+                        
+                    except Exception as e:
+                        logging.error(f"❌ Erro ao enviar webhook: {str(e)}")
+                
+                logging.info(f"✅ Processamento concluído com sucesso para tarefa {task_id}")
+                
+            except Exception as e:
+                error_msg = f"Erro na transcrição AssemblyAI: {str(e)}"
+                logging.error(f"❌ {error_msg}")
+                save_task_to_file(task_id, {"status": "error", "error": error_msg})
+                
     except Exception as e:
-        logger.error(f"❌ Erro na transcrição {task_id}: {e}")
-        transcription_tasks[task_id].update({
-            'status': 'erro',
-            'progress': 0.0,
-            'message': f'Erro: {str(e)}',
-            'completed_at': datetime.now().isoformat()
-        })
-        save_task_to_file(task_id, transcription_tasks[task_id])
+        error_msg = f"Erro geral no processamento: {str(e)}"
+        logging.error(f"❌ {error_msg}")
+        save_task_to_file(task_id, {"status": "error", "error": error_msg})
+    finally:
+        # Remover da lista de tarefas ativas
+        if task_id in active_tasks:
+            active_tasks.remove(task_id)
+            logging.info(f"🧹 Tarefa {task_id} removida da lista ativa")
 
-@app.post("/transcribe", response_model=TranscriptionResponse)
-async def transcribe_video(request: VideoTranscriptionRequest, background_tasks: BackgroundTasks):
+@app.post("/transcribe")
+async def transcribe_video(background_tasks: BackgroundTasks, url: str = Form(...)):
+    """Endpoint para transcrever vídeo do Google Drive"""
     try:
-        # Verificar se há muitas tarefas ativas
-        active_tasks = len([t for t in transcription_tasks.values() if t.get('status') == 'em_progresso'])
-        if active_tasks >= 3:
-            raise HTTPException(status_code=503, detail="Servidor ocupado. Tente novamente em alguns minutos.")
+        # Verificar se o servidor está sobrecarregado
+        if len(active_tasks) >= MAX_CONCURRENT_TASKS:
+            raise HTTPException(status_code=503, detail="Servidor sobrecarregado. Tente novamente em alguns minutos.")
         
+        # Gerar ID único para a tarefa
         task_id = str(uuid.uuid4())
-        if not any([request.url, request.google_drive_url, request.base64_data]):
-            raise HTTPException(status_code=400, detail="Forneça uma URL, Google Drive URL ou dados base64")
         
-        # Iniciar tarefa em background
-        background_tasks.add_task(process_video_transcription, task_id, request)
+        # Adicionar à lista de tarefas ativas
+        active_tasks.add(task_id)
         
-        estimated_time = "2-5 minutos"
-        return TranscriptionResponse(
-            task_id=task_id,
-            status="iniciado",
-            message="Transcrição iniciada com sucesso",
-            upload_status="concluido",
-            estimated_time=estimated_time,
-            check_status_url=f"/status/{task_id}"
-        )
+        # Iniciar processamento em background
+        background_tasks.add_task(process_video_transcription, task_id, url)
+        
+        logging.info(f"🎬 Iniciando processamento da tarefa {task_id}")
+        
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "message": "Transcrição iniciada. Use o endpoint /status/{task_id} para acompanhar o progresso."
+        }
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Erro ao iniciar transcrição: {e}")
+        logging.error(f"❌ Erro ao iniciar transcrição: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
 @app.get("/")
