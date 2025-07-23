@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Form
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -376,12 +376,30 @@ def process_video_transcription(task_id: str, url: str):
             logging.info(f"🧹 Tarefa {task_id} removida da lista ativa")
 
 @app.post("/transcribe")
-async def transcribe_video(background_tasks: BackgroundTasks, url: str = Form(...)):
+async def transcribe_video(background_tasks: BackgroundTasks, request: Request):
     """Endpoint para transcrever vídeo do Google Drive"""
     try:
         # Verificar se o servidor está sobrecarregado
         if len(active_tasks) >= MAX_CONCURRENT_TASKS:
             raise HTTPException(status_code=503, detail="Servidor sobrecarregado. Tente novamente em alguns minutos.")
+        
+        # Tentar obter URL de diferentes formas
+        url = None
+        
+        # Primeiro, tentar como JSON
+        try:
+            body = await request.json()
+            url = body.get('google_drive_url') or body.get('url')
+        except:
+            pass
+        
+        # Se não encontrou no JSON, tentar como form data
+        if not url:
+            form_data = await request.form()
+            url = form_data.get('url')
+        
+        if not url:
+            raise HTTPException(status_code=400, detail="URL do Google Drive não fornecida")
         
         # Gerar ID único para a tarefa
         task_id = str(uuid.uuid4())
