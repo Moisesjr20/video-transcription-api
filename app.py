@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, Request, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, Request, Depends, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -626,13 +626,33 @@ async def login(request: Request, login_data: LoginRequest):
         logger.error(f"❌ Erro no login: {e}")
         raise HTTPException(status_code=500, detail="Erro interno no servidor")
 
+# Dependency para verificar scope de transcrição
+async def require_transcribe_scope(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    if "transcribe" not in current_user.get("scopes", []):
+        logger.warning(f"Usuário {current_user['username']} não tem permissão 'transcribe'")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissão insuficiente. Requer: transcribe"
+        )
+    return current_user
+
+# Dependency para verificar scope de admin
+async def require_admin_scope(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    if "admin" not in current_user.get("scopes", []):
+        logger.warning(f"Usuário {current_user['username']} não tem permissão 'admin'")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissão insuficiente. Requer: admin"
+        )
+    return current_user
+
 # Endpoint seguro de transcrição
 @app.post("/transcribe-secure")
 @limiter.limit(f"{settings.RATE_LIMIT_REQUESTS}/{settings.RATE_LIMIT_MINUTES}minute")
 async def transcribe_video_secure(
     request: Request,
     background_tasks: BackgroundTasks,
-    current_user: Dict[str, Any] = Depends(require_scope("transcribe"))
+    current_user: Dict[str, Any] = Depends(require_transcribe_scope)
 ):
     """Endpoint seguro para transcrever vídeo do Google Drive"""
     try:
@@ -800,7 +820,7 @@ async def ping():
 @limiter.limit(f"{settings.RATE_LIMIT_REQUESTS}/{settings.RATE_LIMIT_MINUTES}minute")
 async def list_tasks(
     request: Request,
-    current_user: Dict[str, Any] = Depends(require_scope("admin")),
+    current_user: Dict[str, Any] = Depends(require_admin_scope),
     limit: int = 50,
     offset: int = 0
 ):
