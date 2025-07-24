@@ -72,6 +72,9 @@ limiter = Limiter(key_func=get_remote_address)
 
 # Configurar WEBHOOK_URL
 WEBHOOK_URL = settings.WEBHOOK_URL
+logging.info(f"🔧 Configuração carregada - WEBHOOK_URL: {'Configurado' if WEBHOOK_URL else 'Não configurado'}")
+if WEBHOOK_URL:
+    logging.info(f"🔧 WEBHOOK_URL: {WEBHOOK_URL}")
 
 app = FastAPI(
     title="Transcritor API - AssemblyAI Seguro",
