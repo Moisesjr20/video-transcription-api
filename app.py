@@ -203,11 +203,20 @@ def save_task_to_file(task_id: str, task_data: dict):
             'task_id': task_id
         })
         
+        # Garantir que o diretório existe
+        TASKS_DIR.mkdir(exist_ok=True)
+        
         task_file = TASKS_DIR / f"{task_id}.json"
+        logger.info(f"💾 Salvando tarefa {task_id} em: {task_file}")
+        
         with open(task_file, 'w', encoding='utf-8') as f:
             json.dump(serializable_data, f, indent=2, ensure_ascii=False)
             
-        logger.info(f"✅ Tarefa {task_id} salva com sucesso")
+        # Verificar se o arquivo foi salvo corretamente
+        if task_file.exists() and task_file.stat().st_size > 0:
+            logger.info(f"✅ Tarefa {task_id} salva com sucesso ({task_file.stat().st_size} bytes)")
+        else:
+            logger.error(f"❌ Tarefa {task_id} não foi salva corretamente")
         
     except Exception as e:
         logger.error(f"❌ Erro ao salvar tarefa {task_id}: {e}")
@@ -222,11 +231,23 @@ def load_task_from_file(task_id: str) -> Optional[dict]:
             return None
             
         task_file = TASKS_DIR / f"{task_id}.json"
+        logger.debug(f"📁 Tentando carregar tarefa {task_id} de: {task_file}")
+        
         if task_file.exists():
+            file_size = task_file.stat().st_size
+            logger.debug(f"📄 Arquivo existe com {file_size} bytes")
+            
+            if file_size == 0:
+                logger.error(f"❌ Arquivo da tarefa {task_id} está vazio")
+                return None
+                
             with open(task_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                logger.debug(f"✅ Tarefa {task_id} carregada com sucesso")
+                logger.info(f"✅ Tarefa {task_id} carregada com sucesso ({file_size} bytes)")
                 return data
+        else:
+            logger.warning(f"📄 Arquivo da tarefa {task_id} não existe: {task_file}")
+            
     except json.JSONDecodeError as e:
         logger.error(f"❌ JSON inválido na tarefa {task_id}: {e}")
     except Exception as e:
@@ -489,6 +510,11 @@ def process_video_transcription(task_id: str, url: str, username: str = "system"
     """Processa a transcrição do vídeo em background"""
     try:
         logging.info(f"🎬 Iniciando processamento da tarefa {task_id}")
+        logging.info(f"🔗 URL: {url}")
+        logging.info(f"👤 Usuário: {username}")
+        logging.info(f"🔗 WEBHOOK_URL configurado: {'Sim' if WEBHOOK_URL else 'Não'}")
+        if WEBHOOK_URL:
+            logging.info(f"🔗 WEBHOOK_URL: {WEBHOOK_URL}")
         
         # Criar diretório temporário para o arquivo
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -543,6 +569,7 @@ def process_video_transcription(task_id: str, url: str, username: str = "system"
                         # Log de auditoria para webhook
                         security_logger.info(f"Enviando webhook para tarefa {task_id} de usuário {username}")
                         logging.info(f"🔗 Enviando resultado para webhook: {WEBHOOK_URL[:30]}...")
+                        logging.info(f"🔗 URL completa do webhook: {WEBHOOK_URL}")
                         
                         webhook_data = {
                             "task_id": task_id,
@@ -555,14 +582,20 @@ def process_video_transcription(task_id: str, url: str, username: str = "system"
                             "user": username
                         }
                         
+                        logging.info(f"📤 Dados do webhook: {len(webhook_data)} campos")
+                        logging.info(f"📤 Texto: {len(webhook_data.get('text', ''))} caracteres")
+                        logging.info(f"📤 Segmentos: {len(webhook_data.get('segments', []))} segmentos")
+                        
                         # Usar httpx com timeout
                         with httpx.Client() as client:
+                            logging.info(f"🌐 Iniciando requisição HTTP para webhook...")
                             response = client.post(
                                 WEBHOOK_URL, 
                                 json=webhook_data, 
                                 timeout=30.0,
                                 headers={"Content-Type": "application/json"}
                             )
+                            logging.info(f"📡 Resposta recebida: {response.status_code}")
                             response.raise_for_status()
                             
                         logging.info(f"✅ Webhook enviado com sucesso. Status: {response.status_code}")
@@ -576,6 +609,8 @@ def process_video_transcription(task_id: str, url: str, username: str = "system"
                         error_msg = f"Erro no webhook: {str(e)}"
                         logging.error(f"❌ {error_msg}")
                         security_logger.error(f"Falha no webhook para tarefa {task_id}: {error_msg}")
+                else:
+                    logging.warning(f"⚠️ WEBHOOK_URL não configurado, pulando envio do webhook")
                 
                 logging.info(f"✅ Processamento concluído com sucesso para tarefa {task_id}")
                 
@@ -919,16 +954,32 @@ async def get_transcription_status_secure(
 async def get_transcription_status(task_id: str, request: Request):
     """Endpoint público para consultar status (compatibilidade)"""
     try:
+        logger.info(f"🔍 Consultando status da tarefa: {task_id}")
+        
         # Validar task_id
         if not re.match(r'^[a-zA-Z0-9-]+$', task_id):
             security_logger.warning(f"Task ID inválido solicitado: {task_id} - IP: {get_remote_address(request)}")
             raise HTTPException(status_code=400, detail="ID da tarefa inválido")
-            
-        task = transcription_tasks.get(task_id) or load_task_from_file(task_id)
-        if not task:
-            logger.warning(f"Tarefa {task_id} não encontrada - IP: {get_remote_address(request)}")
-            raise HTTPException(status_code=404, detail="Tarefa não encontrada")
-            
+        
+        # Verificar primeiro na memória
+        task = transcription_tasks.get(task_id)
+        if task:
+            logger.info(f"✅ Tarefa {task_id} encontrada na memória")
+        else:
+            logger.info(f"📁 Tarefa {task_id} não encontrada na memória, buscando no arquivo...")
+            task = load_task_from_file(task_id)
+            if task:
+                logger.info(f"✅ Tarefa {task_id} encontrada no arquivo")
+            else:
+                logger.warning(f"❌ Tarefa {task_id} não encontrada em lugar nenhum")
+                # Verificar se o arquivo existe
+                task_file = TASKS_DIR / f"{task_id}.json"
+                if task_file.exists():
+                    logger.error(f"📄 Arquivo existe mas não foi carregado: {task_file}")
+                else:
+                    logger.error(f"📄 Arquivo não existe: {task_file}")
+                raise HTTPException(status_code=404, detail="Tarefa não encontrada")
+        
         # Para endpoint público, remover informações sensíveis
         safe_task = task.copy()
         sensitive_fields = ["client_ip", "user", "url"]
@@ -942,7 +993,8 @@ async def get_transcription_status(task_id: str, request: Request):
             for i, segment in enumerate(safe_task['segments']):
                 if not isinstance(segment, dict):
                     logger.warning(f"⚠️ Segmento {i} não é dict: {type(segment)}")
-                    
+        
+        logger.info(f"✅ Status da tarefa {task_id} retornado com sucesso")
         return safe_task
         
     except HTTPException:
