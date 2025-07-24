@@ -53,14 +53,14 @@ Uma API **segura** e **robusta** para transcrição de vídeos do Google Drive u
 ### 1. Configurar Variáveis de Ambiente
 Copie o arquivo de exemplo e configure suas chaves:
 ```bash
-cp .env.example .env
+cp env.example .env
 nano .env
 ```
 
 **Configurações obrigatórias:**
 ```env
-# API da AssemblyAI
-ASSEMBLYAI_API_KEY=sua_chave_assemblyai_aqui
+# API da AssemblyAI (já configurada para desenvolvimento)
+ASSEMBLYAI_API_KEY=245ef4a0549d4808bb382cd40d9c054d
 
 # Segurança (gere chaves fortes!)
 API_SECRET_KEY=sua_chave_secreta_32_caracteres_min
@@ -69,6 +69,8 @@ JWT_SECRET_KEY=sua_chave_jwt_32_caracteres_min
 # Webhook (opcional)
 WEBHOOK_URL=https://seu-webhook.com/callback
 ```
+
+> 💡 **Dica**: Para desenvolvimento, as chaves já estão configuradas. Para produção, altere todas as chaves!
 
 ### 2. Instalar Dependências
 ```bash
