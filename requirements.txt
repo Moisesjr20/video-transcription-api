@@ -12,6 +12,17 @@ python-dotenv==1.0.0
 gdown
 psutil
 
+# Segurança e Autenticação
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Rate Limiting
+slowapi==0.1.9
+
+# HTTP Client
+httpx==0.24.1
+
 # Google API dependencies
 google-auth==2.23.4
 google-auth-oauthlib==1.1.0
