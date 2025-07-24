@@ -558,13 +558,19 @@ def process_video_transcription(task_id: str, url: str, username: str = "system"
                 logging.info(f"📊 Resultado: {len(result.get('segments', []))} segmentos")
                 
                 # Salvar resultado
-                save_task_to_file(task_id, {
+                logging.info(f"💾 Salvando resultado da tarefa {task_id}...")
+                task_data = {
                     "status": "completed",
                     "result": result,
                     "segments": result.get('segments', []),
                     "text": result.get('text', ''),
-                    "duration": result.get('audio_duration', 0)
-                })
+                    "duration": result.get('audio_duration', 0),
+                    "task_id": task_id,
+                    "created_at": datetime.now().isoformat(),
+                    "completed_at": datetime.now().isoformat()
+                }
+                save_task_to_file(task_id, task_data)
+                logging.info(f"✅ Resultado da tarefa {task_id} salvo com sucesso")
                 
                 # Enviar webhook se configurado
                 if WEBHOOK_URL:
@@ -811,6 +817,17 @@ async def transcribe_video(background_tasks: BackgroundTasks, request: Request):
         
         # Adicionar à lista de tarefas ativas
         active_tasks.add(task_id)
+        
+        # Salvar informações iniciais da tarefa
+        initial_task_data = {
+            "task_id": task_id,
+            "status": "iniciando",
+            "created_at": datetime.now().isoformat(),
+            "user": "anonymous",
+            "url": url[:50] + "..." if len(url) > 50 else url
+        }
+        save_task_to_file(task_id, initial_task_data)
+        logging.info(f"💾 Tarefa inicial {task_id} salva com status 'iniciando'")
         
         # Iniciar processamento em background
         background_tasks.add_task(process_video_transcription, task_id, url, "anonymous")
