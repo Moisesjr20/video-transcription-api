@@ -3,6 +3,7 @@ uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 requests==2.31.0
 pydantic==2.5.0
+pydantic-settings==2.1.0
 moviepy==1.0.3
 assemblyai==0.21.0
 numpy==1.24.3

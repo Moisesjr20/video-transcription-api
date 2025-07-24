@@ -1,6 +1,7 @@
 import os
 from typing import Optional
-from pydantic import BaseSettings, validator
+from pydantic import BaseModel, field_validator
+from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 # Carregar variáveis de ambiente
@@ -36,13 +37,15 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "500"))
     ALLOWED_EXTENSIONS: str = os.getenv("ALLOWED_EXTENSIONS", "mp4,avi,mov,mkv,mp3,wav,m4a")
     
-    @validator("ASSEMBLYAI_API_KEY")
+    @field_validator("ASSEMBLYAI_API_KEY")
+    @classmethod
     def validate_assemblyai_key(cls, v):
         if not v or v == "":
             raise ValueError("ASSEMBLYAI_API_KEY é obrigatória")
         return v
     
-    @validator("API_SECRET_KEY", "JWT_SECRET_KEY")
+    @field_validator("API_SECRET_KEY", "JWT_SECRET_KEY")
+    @classmethod
     def validate_secret_keys(cls, v):
         if len(v) < 32:
             raise ValueError("Secret keys devem ter pelo menos 32 caracteres")
