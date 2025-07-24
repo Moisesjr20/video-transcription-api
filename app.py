@@ -445,10 +445,10 @@ def transcribe_with_assemblyai(file_path: str) -> dict:
                 thread = threading.Thread(target=run_transcription)
                 thread.daemon = True
                 thread.start()
-                thread.join(timeout=600)  # 10 minutos de timeout
+                thread.join(timeout=900)  # 15 minutos de timeout
                 
                 if thread.is_alive():
-                    logger.error("❌ Timeout na transcrição (10 minutos)")
+                    logger.error("❌ Timeout na transcrição (15 minutos)")
                     return {
                         'text': "[ERRO: Timeout na transcrição - processo demorou mais de 10 minutos]",
                         'segments': [],

@@ -7,6 +7,16 @@ from dotenv import load_dotenv
 # Carregar variáveis de ambiente
 load_dotenv()
 
+# Debug: verificar se o arquivo .env foi carregado
+import os
+env_file_path = os.path.join(os.getcwd(), '.env')
+print(f"🔧 Verificando arquivo .env: {env_file_path}")
+print(f"🔧 Arquivo .env existe: {os.path.exists(env_file_path)}")
+if os.path.exists(env_file_path):
+    with open(env_file_path, 'r') as f:
+        content = f.read()
+        print(f"🔧 Conteúdo do .env (primeiras 200 chars): {content[:200]}")
+
 class Settings(BaseSettings):
     # API Keys
     ASSEMBLYAI_API_KEY: str = os.getenv("ASSEMBLYAI_API_KEY", "")
