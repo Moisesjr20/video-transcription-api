@@ -293,6 +293,38 @@ def validate_file_size(file_path: Path) -> bool:
         logger.error(f"Erro ao validar tamanho do arquivo: {e}")
         return False
 
+def validate_video_duration(file_path: Path) -> tuple[bool, float]:
+    """Valida duração do vídeo usando moviepy"""
+    try:
+        import moviepy.editor as mp
+        
+        logger.info(f"🎬 Verificando duração do vídeo: {file_path}")
+        
+        with mp.VideoFileClip(str(file_path)) as video:
+            duration_seconds = video.duration
+            duration_hours = duration_seconds / 3600
+            
+            logger.info(f"⏱️ Duração do vídeo: {duration_hours:.2f} horas ({duration_seconds:.0f}s)")
+            
+            is_valid = duration_hours <= settings.MAX_VIDEO_DURATION_HOURS
+            
+            if not is_valid:
+                security_logger.warning(
+                    f"Vídeo muito longo: {duration_hours:.2f}h (limite: {settings.MAX_VIDEO_DURATION_HOURS}h)"
+                )
+                logger.warning(
+                    f"⚠️ Vídeo excede limite: {duration_hours:.2f}h > {settings.MAX_VIDEO_DURATION_HOURS}h"
+                )
+            else:
+                logger.info(f"✅ Duração do vídeo dentro do limite: {duration_hours:.2f}h")
+            
+            return is_valid, duration_hours
+            
+    except Exception as e:
+        logger.error(f"❌ Erro ao verificar duração do vídeo: {e}")
+        # Em caso de erro, assumir válido para não bloquear o processamento
+        return True, 0.0
+
 def extract_google_drive_id(url: str) -> str:
     """Extração segura de ID do Google Drive"""
     if not url or not isinstance(url, str):
@@ -360,8 +392,14 @@ def download_from_google_drive(file_id: str, destination: Path) -> Path:
             destination.unlink()  # Remover arquivo muito grande
             raise Exception(f"Arquivo excede limite de {settings.MAX_FILE_SIZE_MB}MB")
         
+        # Validar duração do vídeo
+        duration_valid, duration_hours = validate_video_duration(destination)
+        if not duration_valid:
+            destination.unlink()  # Remover arquivo muito longo
+            raise Exception(f"Vídeo muito longo: {duration_hours:.2f}h (limite: {settings.MAX_VIDEO_DURATION_HOURS}h)")
+        
         file_size_mb = get_file_size_mb(destination)
-        logger.info(f"✅ Download concluído: {file_size_mb:.1f}MB em {destination}")
+        logger.info(f"✅ Download concluído: {file_size_mb:.1f}MB, {duration_hours:.2f}h em {destination}")
         
         return destination
         
@@ -445,12 +483,13 @@ def transcribe_with_assemblyai(file_path: str) -> dict:
                 thread = threading.Thread(target=run_transcription)
                 thread.daemon = True
                 thread.start()
-                thread.join(timeout=900)  # 15 minutos de timeout
+                timeout_seconds = settings.TRANSCRIPTION_TIMEOUT_MINUTES * 60
+                thread.join(timeout=timeout_seconds)
                 
                 if thread.is_alive():
-                    logger.error("❌ Timeout na transcrição (15 minutos)")
+                    logger.error(f"❌ Timeout na transcrição ({settings.TRANSCRIPTION_TIMEOUT_MINUTES} minutos)")
                     return {
-                        'text': "[ERRO: Timeout na transcrição - processo demorou mais de 10 minutos]",
+                        'text': f"[ERRO: Timeout na transcrição - processo demorou mais de {settings.TRANSCRIPTION_TIMEOUT_MINUTES} minutos]",
                         'segments': [],
                         'language': 'unknown'
                     }
@@ -774,7 +813,10 @@ async def transcribe_video_secure(
             "task_id": task_id,
             "status": "processing",
             "message": "Transcrição iniciada com sucesso!",
-            "estimated_time": "2-5 minutos",
+            "estimated_time": "2-5 minutos para vídeos curtos, até 60 minutos para vídeos de 3h",
+            "max_video_duration": f"{settings.MAX_VIDEO_DURATION_HOURS}h",
+            "max_file_size": f"{settings.MAX_FILE_SIZE_MB}MB",
+            "timeout": f"{settings.TRANSCRIPTION_TIMEOUT_MINUTES} minutos",
             "check_status_url": f"/status/{task_id}"
         }
         
@@ -837,7 +879,10 @@ async def transcribe_video(background_tasks: BackgroundTasks, request: Request):
         return {
             "task_id": task_id,
             "status": "processing",
-            "message": "Transcrição iniciada. Use o endpoint /status/{task_id} para acompanhar o progresso."
+            "message": "Transcrição iniciada. Use o endpoint /status/{task_id} para acompanhar o progresso.",
+            "estimated_time": "2-5 minutos para vídeos curtos, até 60 minutos para vídeos de 3h",
+            "max_video_duration": f"{settings.MAX_VIDEO_DURATION_HOURS}h",
+            "max_file_size": f"{settings.MAX_FILE_SIZE_MB}MB"
         }
         
     except HTTPException:

@@ -10,12 +10,12 @@ load_dotenv()
 # Debug: verificar se o arquivo .env foi carregado
 import os
 env_file_path = os.path.join(os.getcwd(), '.env')
-print(f"🔧 Verificando arquivo .env: {env_file_path}")
-print(f"🔧 Arquivo .env existe: {os.path.exists(env_file_path)}")
+print(f"Verificando arquivo .env: {env_file_path}")
+print(f"Arquivo .env existe: {os.path.exists(env_file_path)}")
 if os.path.exists(env_file_path):
     with open(env_file_path, 'r') as f:
         content = f.read()
-        print(f"🔧 Conteúdo do .env (primeiras 200 chars): {content[:200]}")
+        print(f"Conteudo do .env (primeiras 200 chars): {content[:200]}")
 
 class Settings(BaseSettings):
     # API Keys
@@ -44,8 +44,12 @@ class Settings(BaseSettings):
     LOG_FILE: str = os.getenv("LOG_FILE", "logs/app.log")
     
     # File handling
-    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "500"))
+    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "2000"))
     ALLOWED_EXTENSIONS: str = os.getenv("ALLOWED_EXTENSIONS", "mp4,avi,mov,mkv,mp3,wav,m4a")
+    
+    # Long video support
+    TRANSCRIPTION_TIMEOUT_MINUTES: int = int(os.getenv("TRANSCRIPTION_TIMEOUT_MINUTES", "60"))
+    MAX_VIDEO_DURATION_HOURS: int = int(os.getenv("MAX_VIDEO_DURATION_HOURS", "3"))
     
     @field_validator("ASSEMBLYAI_API_KEY")
     @classmethod
